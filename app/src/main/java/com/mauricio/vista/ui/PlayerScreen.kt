@@ -71,7 +71,7 @@ object PlayerState {
 /** Todo lo que la pantalla del reproductor comparte con sus controles. */
 class PlayerUi(val player: ExoPlayer) {
     var info by mutableStateOf<StreamInfo?>(null)
-    var video by mutableStateOf(Video(url = ""))
+    var video by mutableStateOf(Video(url = "", title = ""))
     var error by mutableStateOf<String?>(null)
     var loading by mutableStateOf(true)
     var offline by mutableStateOf(false)
