@@ -260,6 +260,12 @@ fun SettingsScreen() {
         SettingRow("Siguiente video automático", if (Store.autoplay) "Sí" else "No") { Store.autoplay = !Store.autoplay }
         SettingRow("Ocultar Shorts", if (Store.hideShorts) "Sí" else "No") { Store.hideShorts = !Store.hideShorts }
 
+        Group("Recomendaciones")
+        SettingRow("Mis temas", Store.topics.size.let { if (it == 0) "Ninguno" else "$it temas" }) { topicPickerOpen.value = true }
+        SettingRow("Volver a mostrar lo que oculté", (Store.hiddenVideos.size + Store.blockedChannels.size).let { if (it == 0) "Nada oculto" else "$it ocultos" }) {
+            Store.unblockAll(); Toast.show("Listo, ya no hay nada oculto"); uiScope.launch { com.mauricio.vista.data.Recs.refresh(force = true) }
+        }
+
         Group("Saltar partes (SponsorBlock)")
         SettingRow("Saltar patrocinios y más", if (Store.sponsorBlock) "Sí" else "No") { Store.sponsorBlock = !Store.sponsorBlock }
         if (Store.sponsorBlock) SettingRow("Qué se salta", Store.sbCategories.size.toString() + " tipos") { sbOpen = true }
@@ -297,6 +303,7 @@ fun SettingsScreen() {
     if (tv) LaunchedEffect(Unit) { kotlinx.coroutines.delay(120); runCatching { first.requestFocus() } }
 
     choice?.let { c -> ChoiceDialog(c) { choice = null } }
+    if (topicPickerOpen.value) TopicPicker { topicPickerOpen.value = false }
     if (sbOpen) SponsorDialog { sbOpen = false }
 }
 

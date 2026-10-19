@@ -189,6 +189,30 @@ object Store {
         get() = sp.getString("tv", "") ?: ""
         set(v) { sp.edit().putString("tv", v).apply(); tick() }
 
+    // ------------------------------------------------------------------
+    // Gustos (para las recomendaciones)
+    // ------------------------------------------------------------------
+    /** Temas que eligió la persona, en orden. */
+    var topics: List<String>
+        get() = runCatching { JSONArray(sp.getString("topics", "[]")).let { a -> List(a.length()) { a.getString(it) } } }.getOrDefault(emptyList())
+        set(v) { sp.edit().putString("topics", JSONArray(v).toString()).putBoolean("topicsAsked", true).apply(); tick() }
+
+    /** ¿Ya se preguntaron los temas la primera vez? */
+    var topicsAsked: Boolean
+        get() = sp.getBoolean("topicsAsked", false)
+        set(v) { sp.edit().putBoolean("topicsAsked", v).apply(); tick() }
+
+    /** Videos marcados con «No me interesa». */
+    val hiddenVideos: Set<String> get() = sp.getStringSet("hiddenV", null) ?: emptySet()
+    fun hideVideo(id: String) { sp.edit().putStringSet("hiddenV", (hiddenVideos + id).toList().takeLast(500).toSet()).apply(); tick() }
+
+    /** Canales que no se deben recomendar (llave UC… o liga). */
+    val blockedChannels: Set<String> get() = sp.getStringSet("blockedC", null) ?: emptySet()
+    fun blockChannel(url: String) { sp.edit().putStringSet("blockedC", blockedChannels + key(url)).apply(); tick() }
+    fun unblockAll() { sp.edit().remove("blockedC").remove("hiddenV").apply(); tick() }
+    fun isBlocked(url: String) = url.isNotBlank() && key(url) in blockedChannels
+    fun channelKey(url: String) = key(url)
+
     /** Pasada esta hora, la pantalla deja de reproducir (temporizador). 0 = apagado. */
     var sleepAt: Long = 0
 }

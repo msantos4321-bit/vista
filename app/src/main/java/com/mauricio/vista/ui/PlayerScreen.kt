@@ -174,6 +174,7 @@ fun PlayerScreen(start: Video, queue: List<Video>, startAudioOnly: Boolean) {
                         thumb = ui.video.thumb.ifBlank { Yt.bestImage(info.thumbnails, 480) }, live = Sources.isLive(info),
                     )
                     ui.related = Yt.related(info).let { r -> if (Store.hideShorts) r.filterNot { it.short } else r }
+                    com.mauricio.vista.data.Recs.remember(start.id, Yt.related(info))
                     ui.subtitle = Sources.findSubtitle(info, Store.subtitles)
                     load(if (Sources.isLive(info)) 0 else resume)
                     ui.loading = false

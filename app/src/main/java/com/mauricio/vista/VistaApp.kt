@@ -17,6 +17,7 @@ class VistaApp : Application(), ImageLoaderFactory {
         Yt.init()
         Store.init(this)
         Feed.init(this)
+        com.mauricio.vista.data.Recs.init(this)
         Downloads.init(this)
     }
 

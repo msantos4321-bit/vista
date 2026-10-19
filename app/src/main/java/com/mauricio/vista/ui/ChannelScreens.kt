@@ -1,6 +1,7 @@
 package com.mauricio.vista.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,7 +25,9 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Cast
+import androidx.compose.material.icons.filled.DoNotDisturbOn
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Headphones
@@ -76,7 +79,7 @@ fun VideoMenu(v: Video, onClose: () -> Unit) {
     var showQuality by remember { mutableStateOf(false) }
     Dialog(onDismissRequest = onClose) {
         Column(
-            Modifier.width(if (DeviceUi.isTv) 440.dp else 340.dp).background(C.Panel, RoundedCornerShape(22.dp)).padding(18.dp),
+            Modifier.width(if (DeviceUi.isTv) 440.dp else 340.dp).background(C.Panel, RoundedCornerShape(22.dp)).verticalScroll(androidx.compose.foundation.rememberScrollState()).padding(18.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(v.title, color = C.Hi, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -114,6 +117,12 @@ fun VideoMenu(v: Video, onClose: () -> Unit) {
                     }
                 }
                 if (Store.watched(v.id) != null) MenuRow(Icons.Filled.History, "Quitar del historial") { Store.removeHistory(v.id); onClose() }
+                MenuRow(Icons.Filled.Block, "No me interesa") {
+                    Store.hideVideo(v.id); com.mauricio.vista.data.Recs.applyDislikes(); Toast.show("Listo, ya no te lo mostraré"); onClose()
+                }
+                if (v.channelUrl.isNotBlank()) MenuRow(Icons.Filled.DoNotDisturbOn, "No recomendar este canal") {
+                    Store.blockChannel(v.channelUrl); com.mauricio.vista.data.Recs.applyDislikes(); Toast.show("No volveré a recomendar ${v.channel.ifBlank { "ese canal" }}"); onClose()
+                }
             }
         }
     }
