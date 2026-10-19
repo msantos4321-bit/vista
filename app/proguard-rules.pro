@@ -1,0 +1,11 @@
+-dontobfuscate
+-keep class org.schabi.newpipe.extractor.timeago.patterns.** { *; }
+-keep class org.mozilla.javascript.** { *; }
+-keep class org.mozilla.classfile.ClassFileWriter
+-dontwarn org.mozilla.javascript.**
+-keep class javax.script.** { *; }
+-dontwarn javax.script.**
+-dontwarn jdk.dynalink.**
+-dontwarn org.conscrypt.**
+-dontwarn org.bouncycastle.**
+-dontwarn org.openjsse.**

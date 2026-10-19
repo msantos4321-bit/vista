@@ -1,0 +1,82 @@
+name: Compilar APK
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Compilar
+        run: |
+          set -o pipefail
+          gradle :app:assembleRelease --no-daemon 2>&1 | tee build.log
+
+      - name: Mostrar errores
+        if: failure()
+        run: |
+          grep -E "^e: |error:|What went wrong|Could not" -A2 build.log | head -60 | while IFS= read -r l; do echo "::error::$l"; done
+
+      - name: Firmar APK
+        id: firma
+        env:
+          FIRMA: ${{ secrets.VISTA_FIRMA }}
+        run: |
+          set -e
+          mkdir -p out
+          if [ -z "$FIRMA" ]; then
+            echo "::warning::Falta el secreto VISTA_FIRMA: el código compiló bien, pero no se publica versión hasta agregarlo."
+            echo "ok=no" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          K="$RUNNER_TEMP/k"; mkdir -p "$K"
+          echo "$FIRMA" | base64 -d | tar xz -C "$K"
+          source "$K/claves.env"
+          export PASS
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          U=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          "$BT/zipalign" -p -f 4 "$U" "$K/alineada.apk"
+          "$BT/apksigner" sign --ks "$K/vista.jks" --ks-key-alias vista --ks-pass env:PASS --key-pass env:PASS --out out/Vista.apk "$K/alineada.apk"
+          "$BT/apksigner" verify out/Vista.apk
+          rm -rf "$K"
+          ls -la out
+          echo "ok=si" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        if: steps.firma.outputs.ok == 'si'
+        with:
+          name: Vista
+          path: out/Vista.apk
+
+      - name: Publicar versión
+        if: steps.firma.outputs.ok == 'si'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Vista 1.0.${{ github.run_number }}
+          body: "Descarga directa: https://github.com/${{ github.repository }}/releases/latest/download/Vista.apk"
+          files: out/Vista.apk
