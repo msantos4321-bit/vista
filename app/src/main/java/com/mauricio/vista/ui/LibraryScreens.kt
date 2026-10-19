@@ -221,6 +221,7 @@ fun SettingsScreen() {
                 Toast.show(
                     when {
                         r == null -> "No pude leer ese archivo"
+                        r.second == 0 && Remote.lastZipFiles.isNotBlank() -> "Ese .zip no trae tus suscripciones (trae: ${Remote.lastZipFiles.take(120)}). En Takeout marca «suscripciones»."
                         r.second == 0 -> "No encontré canales en ese archivo"
                         else -> "Listo: ${r.first} canales nuevos (de ${r.second})"
                     },

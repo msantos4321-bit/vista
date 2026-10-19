@@ -13,9 +13,6 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import org.schabi.newpipe.extractor.ServiceList
-import org.schabi.newpipe.extractor.services.youtube.YoutubeService
-import org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeSubscriptionExtractor
 import java.io.ByteArrayInputStream
 import java.io.InputStream
 import java.net.Inet4Address
@@ -148,10 +145,36 @@ object Remote {
         added to fixed.size
     }
 
+    /** Archivos que traía el último .zip (para explicar si no había suscripciones). */
+    var lastZipFiles = ""
+
     private fun parse(bytes: ByteArray): List<Chan> {
         if (bytes.isEmpty()) return emptyList()
-        val ex = YoutubeSubscriptionExtractor(ServiceList.YouTube as YoutubeService)
-        val text = runCatching { String(bytes) }.getOrDefault("")
+        // Archivo .zip de Google Takeout: se leen todos los .csv / .json que traiga adentro
+        if (bytes.size > 4 && bytes[0] == 'P'.code.toByte() && bytes[1] == 'K'.code.toByte()) {
+            val out = LinkedHashMap<String, Chan>()
+            lastZipFiles = ""
+            runCatching {
+                java.util.zip.ZipInputStream(ByteArrayInputStream(bytes)).use { zip ->
+                    while (true) {
+                        val e = zip.nextEntry ?: break
+                        val name = e.name.lowercase()
+                        if (!e.isDirectory) lastZipFiles += (if (lastZipFiles.isEmpty()) "" else ", ") + e.name.substringAfterLast('/')
+                        if (!e.isDirectory && (name.endsWith(".csv") || name.endsWith(".json") || name.endsWith(".txt"))) {
+                            val content = zip.readBytes()
+                            parseText(String(content, Charsets.UTF_8)).forEach { c -> out.getOrPut(c.channelId ?: c.url) { c } }
+                        }
+                    }
+                }
+            }
+            return out.values.toList()
+        }
+        return parseText(String(bytes, Charsets.UTF_8))
+    }
+
+    /** CSV de Takeout («Id. del canal, URL del canal, Título»), JSON, o texto con ligas. */
+    private fun parseText(raw: String): List<Chan> {
+        val text = raw.removePrefix("\uFEFF")
         // Copia de otra Vista
         if (text.trimStart().startsWith("{") && text.contains("\"vista\"")) {
             return runCatching {
@@ -159,18 +182,20 @@ object Remote {
                 List(a.length()) { Chan.fromJson(a.getJSONObject(it)) }
             }.getOrDefault(emptyList())
         }
-        val fromExtractor = runCatching {
-            when {
-                bytes.size > 2 && bytes[0] == 'P'.code.toByte() && bytes[1] == 'K'.code.toByte() -> ex.fromZipInputStream(ByteArrayInputStream(bytes))
-                text.trimStart().startsWith("[") || text.trimStart().startsWith("{") -> ex.fromJsonInputStream(ByteArrayInputStream(bytes))
-                text.contains(",") -> ex.fromCsvInputStream(ByteArrayInputStream(bytes))
-                else -> emptyList()
-            }
-        }.getOrDefault(emptyList())
-        if (fromExtractor.isNotEmpty()) return fromExtractor.map { Chan(it.url(), it.name().orEmpty()) }
-        // Texto suelto con ligas o identificadores de canal
         val out = LinkedHashMap<String, Chan>()
-        Regex("UC[\\w-]{22}").findAll(text).forEach { m -> out.getOrPut(m.value) { Chan("https://www.youtube.com/channel/${m.value}", "") } }
+        val idRx = Regex("UC[\\w-]{22}")
+        // Renglones del CSV: el nombre del canal es lo que va después de la segunda coma
+        text.lineSequence().forEach { line ->
+            val id = idRx.find(line)?.value ?: return@forEach
+            val cols = line.split(",")
+            val title = if (cols.size >= 3) cols.drop(2).joinToString(",").trim().trim('"') else ""
+            out.getOrPut(id) { Chan("https://www.youtube.com/channel/$id", title) }
+        }
+        // Formato JSON viejo de Takeout: "channelId": "UC…", "title": "…"
+        Regex("\"channelId\"\\s*:\\s*\"(UC[\\w-]{22})\"[^}]*?\"title\"\\s*:\\s*\"([^\"]*)\"").findAll(text).forEach { m ->
+            out[m.groupValues[1]] = Chan("https://www.youtube.com/channel/${m.groupValues[1]}", m.groupValues[2])
+        }
+        // Ligas tipo youtube.com/@canal
         Regex("https?://(?:www\\.|m\\.)?youtube\\.com/(?:@[\\w.-]+|c/[\\w.-]+|user/[\\w.-]+)").findAll(text).forEach { m ->
             out.getOrPut(m.value) { Chan(m.value, "") }
         }
