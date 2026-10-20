@@ -68,6 +68,7 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-dash:$media3")
     implementation("androidx.media3:media3-exoplayer-hls:$media3")
     implementation("androidx.media3:media3-ui:$media3")
+    implementation("androidx.media3:media3-session:$media3")
 
     // Lee YouTube sin cuenta y sin anuncios (misma librería que usa NewPipe)
     implementation("com.github.TeamNewPipe:NewPipeExtractor:65cabc2ba5216ee871ace4a9963c08bdbf5d5dc0")

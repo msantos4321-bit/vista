@@ -38,6 +38,7 @@ import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Forward10
@@ -637,4 +638,44 @@ fun PhoneWatchPage(ui: PlayerUi, videoSurface: @Composable () -> Unit, onReload:
         }
     }
     @Suppress("UNUSED_VARIABLE") val unused = onReload
+}
+
+
+// ======================================================================
+// Mini reproductor (celular): abajo, sobre las pestañas, mientras navegas
+// ======================================================================
+@Composable
+fun MiniPlayerBar(ui: PlayerUi, videoSurface: @Composable () -> Unit, onExpand: () -> Unit, onClose: () -> Unit) {
+    val dur = ui.duration.coerceAtLeast(1)
+    Column(Modifier.fillMaxWidth().background(C.Panel)) {
+        Box(Modifier.fillMaxWidth().height(2.dp).background(C.Line)) {
+            Box(Modifier.fillMaxWidth((ui.position.toFloat() / dur).coerceIn(0f, 1f)).height(2.dp).background(C.Accent))
+        }
+        Row(
+            Modifier.fillMaxWidth().pointerInput(Unit) { detectTapGestures(onTap = { onExpand() }) }.padding(end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.clip(RoundedCornerShape(topEnd = 6.dp, bottomEnd = 6.dp))) {
+                videoSurface()
+                if (ui.audioOnly) Box(Modifier.width(112.dp).height(63.dp)) { Img(ui.video.thumbHq, Modifier.fillMaxSize()) }
+            }
+            Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
+                Text(ui.video.title, color = C.Hi, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(ui.video.channel, color = C.Low, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            MiniBtn(if (ui.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, "Reproducir") { ui.toggle() }
+            ui.next?.let { n -> MiniBtn(Icons.Filled.SkipNext, "Siguiente") { ui.goNext(n) } }
+            MiniBtn(Icons.Filled.Close, "Cerrar", onClose)
+        }
+    }
+}
+
+@Composable
+private fun MiniBtn(icon: ImageVector, label: String, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = ClickableSurfaceDefaults.shape(CircleShape),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = 1f, pressedScale = 0.9f),
+        colors = ClickableSurfaceDefaults.colors(containerColor = Color.Transparent, contentColor = C.Hi, pressedContainerColor = C.Panel2, focusedContainerColor = C.Panel2),
+    ) { Icon(icon, label, Modifier.padding(10.dp).size(24.dp)) }
 }

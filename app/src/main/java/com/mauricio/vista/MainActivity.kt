@@ -70,7 +70,7 @@ class MainActivity : ComponentActivity() {
     // Imagen en imagen: al salir de la app con un video, se sigue viendo en una ventanita
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        if (!DeviceUi.isTv && PlayerState.active && PlayerState.playing && !PlayerState.audioOnly && Build.VERSION.SDK_INT >= 26) {
+        if (!DeviceUi.isTv && PlayerState.active && PlayerState.playing && !PlayerState.audioOnly && !PlayerState.mini && Build.VERSION.SDK_INT >= 26) {
             runCatching { enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build()) }
         }
     }

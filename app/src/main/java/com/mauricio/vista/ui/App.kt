@@ -32,6 +32,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -88,7 +89,7 @@ class Nav(
     }
 
     /** Pasa al siguiente sin cambiar la fila de origen (lo usa el reproductor). */
-    fun continueWith(v: Video, audioOnly: Boolean = false) = go(Route.Player(v, emptyList(), audioOnly))
+    fun continueWith(v: Video, audioOnly: Boolean = false) { activePlayer.value = Route.Player(v, emptyList(), audioOnly) }
 
     /** Reproduce una lista completa en orden (o revuelta). */
     fun playAll(list: List<Video>, shuffle: Boolean = false) {
@@ -111,6 +112,11 @@ val linkedDevice = mutableStateOf<com.mauricio.vista.data.Store.Device?>(null)
 /** Video abierto en la tele a pedido del celular, para el menú de opciones (clic largo). */
 val videoMenu = mutableStateOf<Video?>(null)
 
+/** El video que se está viendo (vive aparte de las pantallas para poder minimizarlo en el celular). */
+val activePlayer = mutableStateOf<Route.Player?>(null)
+/** true = reproductor minimizado abajo (celular), se sigue navegando. */
+val playerMini = mutableStateOf(false)
+
 @Composable
 fun App() {
     val stack = remember { mutableStateListOf<Route>(Route.Home) }
@@ -119,15 +125,26 @@ fun App() {
     val nav = remember {
         Nav(
             go = { r ->
-                val top = stack.last()
                 when {
-                    isTopLevel(r) -> { stack.clear(); stack.add(r) }
-                    // Un video nuevo reemplaza al que se estaba viendo (no se apilan reproductores)
-                    r is Route.Player && top is Route.Player -> { stack[stack.lastIndex] = r }
-                    else -> stack.add(r)
+                    // El reproductor no se apila: reemplaza al anterior y se abre en grande
+                    r is Route.Player -> { activePlayer.value = r; playerMini.value = false }
+                    else -> {
+                        // Navegar desde el reproductor grande lo minimiza (celular) o lo cierra (tele)
+                        if (activePlayer.value != null && !playerMini.value) {
+                            if (DeviceUi.isTv) activePlayer.value = null else playerMini.value = true
+                        }
+                        if (isTopLevel(r)) { stack.clear(); stack.add(r) } else stack.add(r)
+                    }
                 }
             },
-            back = { if (stack.size > 1) stack.removeAt(stack.lastIndex) else if (stack.last() != Route.Home) { stack.clear(); stack.add(Route.Home) } },
+            back = {
+                when {
+                    // Atrás desde el video: en el celular se hace pequeño y sigue sonando; en la tele se cierra
+                    activePlayer.value != null && !playerMini.value -> if (DeviceUi.isTv) activePlayer.value = null else playerMini.value = true
+                    stack.size > 1 -> stack.removeAt(stack.lastIndex)
+                    stack.last() != Route.Home -> { stack.clear(); stack.add(Route.Home) }
+                }
+            },
             memory = { k -> memories.getOrPut(k) { FocusMemory() } },
         )
     }
@@ -166,24 +183,41 @@ fun App() {
 
     // Si la app se cerró sola hace poco, se abre en modo seguro: primero ofrece actualizar
     var recovering by remember { mutableStateOf(com.mauricio.vista.data.Store.crashedRecently()) }
+    // ¿Quién está viendo? (si hay varios perfiles)
+    var choosing by remember { mutableStateOf(com.mauricio.vista.data.Profiles.shouldAsk()) }
 
     val top = stack.last()
-    BackHandler(enabled = stack.size > 1 || top != Route.Home) { nav.back() }
+    val player = activePlayer.value
+    val mini = playerMini.value && !DeviceUi.isTv
+    BackHandler(enabled = (player == null || mini) && (stack.size > 1 || top != Route.Home)) { nav.back() }
+    LaunchedEffect(mini, player) { PlayerState.mini = mini && player != null }
+
+    // El mismo reproductor se mueve entre pantalla grande y mini sin cortarse
+    val playerContent = remember(player) {
+        movableContentOf { isMini: Boolean ->
+            if (player != null) PlayerScreen(player.video, player.queue, player.audioOnly, mini = isMini, onClose = { activePlayer.value = null })
+        }
+    }
+
+    val profile by com.mauricio.vista.data.Profiles.current.collectAsState()
+    LaunchedEffect(profile.id) { activePlayer.value = null; stack.clear(); stack.add(Route.Home); memories.clear() }
 
     CompositionLocalProvider(LocalNav provides nav) {
-        Box(Modifier.fillMaxSize().background(C.Bg)) {
+        key(profile.id) { Box(Modifier.fillMaxSize().background(C.Bg)) {
             when {
                 recovering -> RecoveryScreen { recovering = false; com.mauricio.vista.data.Store.clearCrash() }
-                top is Route.Player -> key(top.video.id) { PlayerScreen(top.video, top.queue, top.audioOnly) }
+                choosing || profilePickerOpen.value -> ProfilePicker { choosing = false; profilePickerOpen.value = false }
+                player != null && !mini -> playerContent(false)
                 DeviceUi.isTv -> TvShell(top)
-                else -> PhoneShell(top)
+                else -> PhoneShell(top, miniPlayer = if (player != null) ({ playerContent(true) }) else null)
             }
             videoMenu.value?.let { v -> VideoMenu(v) { videoMenu.value = null } }
             linkedDevice.value?.let { d -> LinkedDeviceDialog(d) { linkedDevice.value = null } }
             saveToListVideo.value?.let { vs -> SaveToListDialog(vs) { saveToListVideo.value = null } }
+            if (profileManagerOpen.value) ProfileManager { profileManagerOpen.value = false }
             Toast.Host()
             AutoUpdateCheck()
-        }
+        } }
     }
 }
 
@@ -247,6 +281,23 @@ private fun Sidebar(current: Route, onSelect: (Route) -> Unit) {
             .padding(horizontal = 14.dp, vertical = 22.dp),
         verticalArrangement = Arrangement.Center,
     ) {
+        // Perfil (cambiar de persona)
+        val me by com.mauricio.vista.data.Profiles.current.collectAsState()
+        Surface(
+            onClick = { profilePickerOpen.value = true },
+            modifier = Modifier.fillMaxWidth().padding(bottom = 14.dp),
+            shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(50)),
+            scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
+            colors = ClickableSurfaceDefaults.colors(containerColor = Color.Transparent, contentColor = C.Mid, focusedContainerColor = C.Hi, focusedContentColor = C.Bg),
+        ) {
+            Row(Modifier.padding(horizontal = 6.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                ProfileBadge(me, 30.dp)
+                if (expanded) Column(Modifier.padding(start = 12.dp)) {
+                    Text(me.name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                    Text("Cambiar perfil", fontSize = 11.sp, maxLines = 1)
+                }
+            }
+        }
         // Logo
         Row(Modifier.padding(start = 6.dp, bottom = 26.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(36.dp).clip(RoundedCornerShape(10.dp)).background(C.gradient), contentAlignment = Alignment.Center) {
@@ -305,10 +356,11 @@ private val phoneTabs = listOf(
 )
 
 @Composable
-private fun PhoneShell(top: Route) {
+private fun PhoneShell(top: Route, miniPlayer: (@Composable () -> Unit)? = null) {
     val nav = LocalNav.current
     Column(Modifier.fillMaxSize().background(C.Bg).systemBarsPadding()) {
         Box(Modifier.weight(1f).fillMaxWidth()) { Screen(top) }
+        miniPlayer?.invoke()
         Box(Modifier.fillMaxWidth().height(0.5.dp).background(C.Line))
         Row(Modifier.fillMaxWidth().background(C.Bg2).padding(top = 7.dp, bottom = 6.dp)) {
             phoneTabs.forEach { t ->

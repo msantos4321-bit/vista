@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -68,6 +70,8 @@ object PlayerState {
     var playing by mutableStateOf(false)
     var audioOnly by mutableStateOf(false)
     var inPip by mutableStateOf(false)
+    /** Minimizado abajo mientras se navega (celular). */
+    var mini by mutableStateOf(false)
 }
 
 /** Todo lo que la pantalla del reproductor comparte con sus controles. */
@@ -124,7 +128,7 @@ class PlayerUi(val player: ExoPlayer) {
 @SuppressLint("UnsafeOptInUsageError")
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
-fun PlayerScreen(start: Video, queue: List<Video>, startAudioOnly: Boolean) {
+fun PlayerScreen(start: Video, queue: List<Video>, startAudioOnly: Boolean, mini: Boolean = false, onClose: () -> Unit = {}) {
     val nav = LocalNav.current
     val ctx = LocalContext.current
     val tv = DeviceUi.isTv
@@ -188,6 +192,10 @@ fun PlayerScreen(start: Video, queue: List<Video>, startAudioOnly: Boolean) {
         } else {
             runCatching { Yt.stream(start.url, fresh = retry > 0) }
                 .onSuccess { info ->
+                    if (com.mauricio.vista.data.Profiles.isKids && info.ageLimit > 0) {
+                        ui.error = "Este video no está disponible en el perfil infantil."; ui.loading = false
+                        return@onSuccess
+                    }
                     ui.info = info
                     ui.video = ui.video.copy(
                         title = info.name.orEmpty(), channel = info.uploaderName.orEmpty(), channelUrl = info.uploaderUrl.orEmpty(),
@@ -217,6 +225,12 @@ fun PlayerScreen(start: Video, queue: List<Video>, startAudioOnly: Boolean) {
     // 2) Eventos del reproductor
     DisposableEffect(Unit) {
         PlayerState.active = true
+        // Notificación con controles (celular y tableta)
+        if (!tv) {
+            com.mauricio.vista.player.Media.attach(ctx, player)
+            com.mauricio.vista.player.Media.onNext = { ui.next?.let { ui.goNext(it) } }
+            com.mauricio.vista.player.Media.hasNext = { ui.next != null }
+        }
         com.mauricio.vista.data.Recs.playing = true
         player.setPlaybackSpeed(ui.speed)
         val l = object : Player.Listener {
@@ -279,12 +293,14 @@ fun PlayerScreen(start: Video, queue: List<Video>, startAudioOnly: Boolean) {
             player.removeListener(l)
             player.release()
             PlayerState.active = false
+            if (!tv) com.mauricio.vista.player.Media.release(ctx)
             com.mauricio.vista.data.Recs.playing = false
             PlayerState.playing = false
             DeviceUi.setPlaying(false)
         }
     }
     LaunchedEffect(ui.audioOnly) { PlayerState.audioOnly = ui.audioOnly }
+    LaunchedEffect(ui.video) { com.mauricio.vista.player.Media.current = ui.video }
 
     // 3) Avance, guardado, SponsorBlock y temporizador
     LaunchedEffect(Unit) {
@@ -340,15 +356,23 @@ fun PlayerScreen(start: Video, queue: List<Video>, startAudioOnly: Boolean) {
     val owner = LocalLifecycleOwner.current
     DisposableEffect(owner) {
         val obs = LifecycleEventObserver { _, e ->
-            if (e == Lifecycle.Event.ON_STOP && !ui.audioOnly && !PlayerState.inPip) player.pause()
+            // Al salir o apagar la pantalla: sigue sonando si está activado (sin gastar en imagen); si no, pausa
+            if (e == Lifecycle.Event.ON_STOP && !ui.audioOnly && !PlayerState.inPip) {
+                if (Store.backgroundPlay && !tv) player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().setTrackTypeDisabled(MC.TRACK_TYPE_VIDEO, true).build()
+                else player.pause()
+            }
+            if (e == Lifecycle.Event.ON_START && !ui.audioOnly) {
+                player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().setTrackTypeDisabled(MC.TRACK_TYPE_VIDEO, false).build()
+            }
         }
         owner.lifecycle.addObserver(obs)
         onDispose { owner.lifecycle.removeObserver(obs) }
     }
 
-    LaunchedEffect(ui.fullscreen) { if (!tv) DeviceUi.setPlaying(ui.fullscreen) }
+    LaunchedEffect(ui.fullscreen, mini) { if (!tv) DeviceUi.setPlaying(ui.fullscreen && !mini) }
+    LaunchedEffect(mini) { if (mini) { ui.fullscreen = false; ui.panel = null } }
 
-    BackHandler {
+    BackHandler(enabled = !mini) {
         when {
             ui.panel != null -> ui.panel = null
             tv && ui.controls && ui.isPlaying -> { ui.controls = false; runCatching { rootFr.requestFocus() } }
@@ -358,7 +382,7 @@ fun PlayerScreen(start: Video, queue: List<Video>, startAudioOnly: Boolean) {
     }
 
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
-    val immersive = tv || ui.fullscreen || landscape || PlayerState.inPip
+    val immersive = !mini && (tv || ui.fullscreen || landscape || PlayerState.inPip)
 
     val videoSurface: @Composable (Modifier) -> Unit = { m ->
         Box(m.background(Color.Black)) {
@@ -382,11 +406,13 @@ fun PlayerScreen(start: Video, queue: List<Video>, startAudioOnly: Boolean) {
                 modifier = Modifier.fillMaxSize(),
             )
             if (ui.audioOnly) AudioArtwork(ui)
-            if (!PlayerState.inPip) PlayerOverlay(ui, tv, immersive, onBack = { if (!tv && ui.fullscreen) ui.fullscreen = false else nav.back() }, onRetry = { retry++ })
+            if (!PlayerState.inPip && !mini) PlayerOverlay(ui, tv, immersive, onBack = { if (!tv && ui.fullscreen) ui.fullscreen = false else nav.back() }, onRetry = { retry++ })
         }
     }
 
-    if (immersive) {
+    if (mini) {
+        MiniPlayerBar(ui, videoSurface = { videoSurface(Modifier.width(112.dp).aspectRatio(16f / 9f)) }, onExpand = { playerMini.value = false }, onClose = onClose)
+    } else if (immersive) {
         Box(
             Modifier
                 .fillMaxSize()

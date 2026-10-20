@@ -73,8 +73,11 @@ object Recs {
     private var builtFrom = ""
 
     fun init(ctx: Context) {
-        relFile = File(ctx.filesDir, "relacionados.json")
-        topicFile = File(ctx.filesDir, "temas.json")
+        relFile = File(Profiles.dir(ctx), "relacionados.json")
+        topicFile = File(Profiles.dir(ctx), "temas.json")
+        synchronized(related) { related.clear() }
+        synchronized(topicCache) { topicCache.clear() }
+        _topicRows.value = emptyMap(); builtAt = 0; builtFrom = ""
         runCatching {
             val o = JSONObject(relFile.readText())
             o.keys().forEach { k ->

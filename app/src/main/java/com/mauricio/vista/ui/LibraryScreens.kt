@@ -270,6 +270,10 @@ fun SettingsScreen() {
             ActionButton("", { nav.back() }, icon = Icons.AutoMirrored.Filled.ArrowBack)
             PhoneTopBar("Ajustes")
         }
+        Group("Perfiles")
+        SettingRow("Cambiar de perfil", com.mauricio.vista.data.Profiles.current.value.name) { profilePickerOpen.value = true }
+        SettingRow("Administrar perfiles (agregar, infantil, PIN)", "${com.mauricio.vista.data.Profiles.list.value.size}") { profileManagerOpen.value = true }
+
         Group("Apariencia")
         SettingRow("Colores", themeLabel(Store.theme)) {
             choice = Choice("Colores", listOf("" to "Recomendado (" + (if (tv) "noche suave" else "automático") + ")", "dark" to "Noche suave", "light" to "Claro", "auto" to "Automático (claro de día)"), Store.theme) { Store.theme = it as String }
@@ -291,6 +295,7 @@ fun SettingsScreen() {
         SettingRow("Tamaño de subtítulos", scaleLabel(Store.subtitleScale)) {
             choice = Choice("Tamaño de subtítulos", listOf(1f, 1.3f, 1.6f, 2f).map { it to scaleLabel(it) }, Store.subtitleScale) { Store.subtitleScale = it as Float }
         }
+        if (!tv) SettingRow("Seguir sonando al salir o con la pantalla apagada", if (Store.backgroundPlay) "Sí" else "No") { Store.backgroundPlay = !Store.backgroundPlay }
         SettingRow("Siguiente video automático", if (Store.autoplay) "Sí" else "No") { Store.autoplay = !Store.autoplay }
         SettingRow("Ocultar Shorts", if (Store.hideShorts) "Sí" else "No") { Store.hideShorts = !Store.hideShorts }
 

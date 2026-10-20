@@ -40,7 +40,8 @@ object Feed {
     private val lock = Mutex()
 
     fun init(ctx: Context) {
-        cache = File(ctx.filesDir, "feed.json")
+        cache = File(Profiles.dir(ctx), "feed.json")
+        _videos.value = emptyList(); _state.value = State.Empty; loadedAt = 0
         runCatching {
             val o = JSONObject(cache.readText())
             loadedAt = o.optLong("at")

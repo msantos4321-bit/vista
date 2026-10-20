@@ -27,6 +27,7 @@ class VistaApp : Application(), ImageLoaderFactory {
             prev?.uncaughtException(t, e)
         }
         Yt.init()
+        com.mauricio.vista.data.Profiles.init(this)
         Store.init(this)
         Feed.init(this)
         com.mauricio.vista.data.Recs.init(this)

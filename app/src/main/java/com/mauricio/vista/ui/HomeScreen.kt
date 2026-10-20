@@ -132,7 +132,7 @@ private fun buildRows(): List<HomeRow> {
     if (chans.isNotEmpty()) out += HomeRow("chans", "Canales que quizá te gusten", emptyList(), chans = chans)
     Store.topics.forEach { t -> topics[t]?.clean()?.takeIf { it.isNotEmpty() }?.let { out += HomeRow("t:$t", t, it) } }
     if (later.isNotEmpty()) out += HomeRow("later", "Ver después", later.take(30))
-    HomeData.kiosks.forEach { (id, title) -> HomeData.rows[id]?.clean()?.takeIf { it.isNotEmpty() }?.let { out += HomeRow(id, title, it.take(30)) } }
+    if (!com.mauricio.vista.data.Profiles.isKids) HomeData.kiosks.forEach { (id, title) -> HomeData.rows[id]?.clean()?.takeIf { it.isNotEmpty() }?.let { out += HomeRow(id, title, it.take(30)) } }
     return out
 }
 
@@ -231,7 +231,7 @@ private fun PhoneHome() {
     val topics = if (tick >= 0) Store.topics else emptyList()
     val tabs = listOf("foryou" to "Para ti", "feed" to "Suscripciones") +
         topics.map { "t:$it" to it } +
-        HomeData.kiosks.map { it.first to it.second.substringBefore(" de ").replace("Tendencias en música", "Música") }
+        (if (com.mauricio.vista.data.Profiles.isKids) emptyList() else HomeData.kiosks.map { it.first to it.second.substringBefore(" de ").replace("Tendencias en música", "Música") })
     val cont = history.filter { !it.finished && it.posMs > 15_000 }.take(15)
     // «Para ti»: recomendaciones con lo nuevo de tus canales intercalado (2 y 1)
     val mixed = remember(forYou, feed) {
@@ -261,6 +261,12 @@ private fun PhoneHome() {
                 }
                 Text("  Vista", color = C.Hi, fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                 if (Store.tvAddress.isNotBlank()) ActionButton("", { nav.go(Route.Connect) }, icon = Icons.Filled.Cast)
+                if (com.mauricio.vista.data.Profiles.list.value.size > 1) {
+                    Spacer(Modifier.width(6.dp))
+                    Surface(onClick = { profilePickerOpen.value = true }, shape = androidx.tv.material3.ClickableSurfaceDefaults.shape(androidx.compose.foundation.shape.CircleShape)) {
+                        ProfileBadge(com.mauricio.vista.data.Profiles.current.value, 34.dp)
+                    }
+                }
                 Spacer(Modifier.width(6.dp))
                 ActionButton("", { nav.go(Route.Search()) }, icon = Icons.Filled.Search)
             }

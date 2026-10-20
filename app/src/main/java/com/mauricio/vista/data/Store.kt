@@ -28,8 +28,13 @@ object Store {
     /** Cambia cada vez que se toca un ajuste (para refrescar pantallas). */
     val settingsTick = MutableStateFlow(0)
 
+    /** Ajustes del aparato (no cambian con el perfil): aparatos conectados, colores, errores. */
+    private lateinit var gp: SharedPreferences
+
     fun init(ctx: Context) {
-        sp = ctx.getSharedPreferences("vista", Context.MODE_PRIVATE)
+        gp = ctx.getSharedPreferences("vista", Context.MODE_PRIVATE)
+        // Cada perfil guarda lo suyo; el perfil principal usa el archivo de siempre
+        sp = ctx.getSharedPreferences(Profiles.prefsName(), Context.MODE_PRIVATE)
         _subs.value = readList("subs") { Chan.fromJson(it) }
         _history.value = readList("history") { Watched.fromJson(it) }
         _later.value = readList("later") { Video.fromJson(it) }
@@ -157,6 +162,11 @@ object Store {
         get() = sp.getFloat("speed", 1f)
         set(v) { sp.edit().putFloat("speed", v).apply(); tick() }
 
+    /** Al salir de la app o apagar la pantalla, el video sigue sonando (con controles en la notificación). */
+    var backgroundPlay: Boolean
+        get() = sp.getBoolean("bgPlay", true)
+        set(v) { sp.edit().putBoolean("bgPlay", v).apply(); tick() }
+
     var autoplay: Boolean
         get() = sp.getBoolean("autoplay", true)
         set(v) { sp.edit().putBoolean("autoplay", v).apply(); tick() }
@@ -191,23 +201,23 @@ object Store {
 
     val devices: List<Device>
         get() = runCatching {
-            val a = JSONArray(sp.getString("devices", "[]"))
+            val a = JSONArray(gp.getString("devices", "[]"))
             List(a.length()) { a.getJSONObject(it).let { o -> Device(o.getString("h"), o.optString("n"), o.optBoolean("tv")) } }
         }.getOrDefault(emptyList()).ifEmpty {
             // Versión anterior: solo se guardaba la tele
-            (sp.getString("tv", "") ?: "").takeIf { it.isNotBlank() }?.let { listOf(Device(it, "Tele", true)) } ?: emptyList()
+            (gp.getString("tv", "") ?: "").takeIf { it.isNotBlank() }?.let { listOf(Device(it, "Tele", true)) } ?: emptyList()
         }
 
     fun addDevice(d: Device) {
         val list = listOf(d) + devices.filterNot { it.host == d.host || (d.name.isNotBlank() && it.name == d.name) }
         val a = JSONArray(); list.forEach { a.put(org.json.JSONObject().put("h", it.host).put("n", it.name).put("tv", it.tv)) }
-        sp.edit().putString("devices", a.toString()).remove("tv").apply(); tick()
+        gp.edit().putString("devices", a.toString()).remove("tv").apply(); tick()
     }
 
     fun removeDevice(host: String) {
         val list = devices.filterNot { it.host == host }
         val a = JSONArray(); list.forEach { a.put(org.json.JSONObject().put("h", it.host).put("n", it.name).put("tv", it.tv)) }
-        sp.edit().putString("devices", a.toString()).remove("tv").apply(); tick()
+        gp.edit().putString("devices", a.toString()).remove("tv").apply(); tick()
     }
 
     /** La tele para «Ver en la tele» (o el primer aparato conectado). */
@@ -215,17 +225,17 @@ object Store {
 
     /** Detalle del último error (para mandármelo y saber qué pasó). */
     var lastError: String
-        get() = sp.getString("lastError", "") ?: ""
-        set(v) { sp.edit().putString("lastError", v.take(6000)).commit() }
+        get() = gp.getString("lastError", "") ?: ""
+        set(v) { gp.edit().putString("lastError", v.take(6000)).commit() }
 
     /** ¿La app se cerró sola hace poco? (al abrir se ofrece actualizar antes de cargar todo) */
-    fun crashedRecently(): Boolean = System.currentTimeMillis() - sp.getLong("crashAt", 0) < 10 * 60_000
-    fun clearCrash() { sp.edit().remove("crashAt").apply() }
+    fun crashedRecently(): Boolean = System.currentTimeMillis() - gp.getLong("crashAt", 0) < 10 * 60_000
+    fun clearCrash() { gp.edit().remove("crashAt").apply() }
 
     /** "auto", "dark" o "light". */
     var theme: String
-        get() = sp.getString("theme", "") ?: ""
-        set(v) { sp.edit().putString("theme", v).apply(); tick() }
+        get() = gp.getString("theme", "") ?: ""
+        set(v) { gp.edit().putString("theme", v).apply(); tick() }
 
     // ------------------------------------------------------------------
     // Pasar la cuenta completa a otro aparato

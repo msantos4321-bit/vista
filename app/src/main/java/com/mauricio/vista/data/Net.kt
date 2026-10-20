@@ -71,6 +71,11 @@ class YtDownloader : Downloader() {
             b.removeHeader(name)
             values.forEach { v -> b.addHeader(name, v) }
         }
+        // Perfil infantil: modo restringido de YouTube (oculta lo que no es para niños)
+        if (Profiles.isKids && request.url().contains("youtube.com")) {
+            val prev = b.build().header("Cookie")
+            b.header("Cookie", listOfNotNull(prev, "PREF=f2=8000000").joinToString("; "))
+        }
         Net.client.newCall(b.build()).execute().use { r ->
             if (r.code == 429) throw ReCaptchaException("YouTube pidió verificación", request.url())
             val text = r.body?.string()

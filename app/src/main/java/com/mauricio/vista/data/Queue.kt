@@ -25,7 +25,8 @@ object Queue {
     private var file: File? = null
 
     fun init(ctx: Context) {
-        file = File(ctx.filesDir, "cola.json")
+        file = File(Profiles.dir(ctx), "cola.json")
+        _items.value = emptyList(); _repeat.value = "off"; context = emptyList()
         runCatching {
             val o = JSONObject(file!!.readText())
             val a = o.getJSONArray("v")
@@ -118,7 +119,7 @@ object Playlists {
     private var file: File? = null
 
     fun init(ctx: Context) {
-        file = File(ctx.filesDir, "listas.json")
+        file = File(Profiles.dir(ctx), "listas.json")
         _lists.value = runCatching {
             val a = JSONArray(file!!.readText())
             List(a.length()) { PL.fromJson(a.getJSONObject(it)) }
