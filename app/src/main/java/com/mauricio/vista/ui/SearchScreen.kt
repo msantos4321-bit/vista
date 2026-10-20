@@ -120,7 +120,7 @@ fun SearchScreen(initial: String) {
         }.onFailure { Toast.show("Este aparato no tiene búsqueda por voz") }
     }
 
-    val cols = if (tv) 4 else 1
+    val cols = if (tv) 4 else phoneCols()
     val grid = rememberLazyGridState()
     LaunchedEffect(grid) {
         snapshotFlow { grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }.collect { last ->

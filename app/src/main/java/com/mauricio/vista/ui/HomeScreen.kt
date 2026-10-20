@@ -237,12 +237,13 @@ private fun PhoneHome() {
         else -> HomeData.rows[tab]?.clean().orEmpty()
     }
     val state = rememberLazyListState()
+    val cols = phoneCols()
 
     LazyColumn(Modifier.fillMaxSize(), state = state) {
         item {
             Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(30.dp).clip(RoundedCornerShape(9.dp)).background(C.gradient), contentAlignment = Alignment.Center) {
-                    Text("▶", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Text("▶", color = C.OnAccent, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 }
                 Text("  Vista", color = C.Hi, fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                 if (Store.tvAddress.isNotBlank()) ActionButton("", { nav.go(Route.Connect) }, icon = Icons.Filled.Cast)
@@ -286,12 +287,20 @@ private fun PhoneHome() {
                 }
             }
             else -> {
-                list.forEachIndexed { idx, v ->
-                    item(key = "v:" + v.id) {
-                        PhoneVideoCard(v, onClick = { nav.play(v, list.drop(idx + 1).take(20)) }, onLongClick = { videoMenu.value = v })
+                list.chunked(cols).forEachIndexed { ri, rowVids ->
+                    item(key = "v:" + rowVids.first().id) {
+                        Row(Modifier.fillMaxWidth().padding(horizontal = if (cols > 1) 6.dp else 0.dp)) {
+                            rowVids.forEach { v ->
+                                val idx = list.indexOf(v)
+                                Box(Modifier.weight(1f)) {
+                                    PhoneVideoCard(v, onClick = { nav.play(v, list.drop(idx + 1).take(20)) }, onLongClick = { videoMenu.value = v })
+                                }
+                            }
+                            repeat(cols - rowVids.size) { Spacer(Modifier.weight(1f)) }
+                        }
                     }
                     // Después de los primeros videos: canales nuevos para descubrir
-                    if (tab == "foryou" && idx == 3 && chans.isNotEmpty()) {
+                    if (tab == "foryou" && ri == (4 / cols).coerceAtLeast(1) - 1 && chans.isNotEmpty()) {
                         item(key = "chans") {
                             Column(Modifier.padding(bottom = 18.dp)) {
                                 Text("Canales que quizá te gusten", color = C.Hi, fontSize = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 16.dp, bottom = 8.dp))

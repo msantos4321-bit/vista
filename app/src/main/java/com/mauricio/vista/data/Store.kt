@@ -184,10 +184,86 @@ object Store {
         get() = sp.getFloat("subs_scale", 1.3f)
         set(v) { sp.edit().putFloat("subs_scale", v).apply(); tick() }
 
-    /** Dirección de la tele conectada (solo en el celular), p. ej. 192.168.1.20:8723. */
-    var tvAddress: String
-        get() = sp.getString("tv", "") ?: ""
-        set(v) { sp.edit().putString("tv", v).apply(); tick() }
+    // ------------------------------------------------------------------
+    // Otros aparatos de la casa conectados (tele, tableta, otro celular)
+    // ------------------------------------------------------------------
+    data class Device(val host: String, val name: String, val tv: Boolean)
+
+    val devices: List<Device>
+        get() = runCatching {
+            val a = JSONArray(sp.getString("devices", "[]"))
+            List(a.length()) { a.getJSONObject(it).let { o -> Device(o.getString("h"), o.optString("n"), o.optBoolean("tv")) } }
+        }.getOrDefault(emptyList()).ifEmpty {
+            // Versión anterior: solo se guardaba la tele
+            (sp.getString("tv", "") ?: "").takeIf { it.isNotBlank() }?.let { listOf(Device(it, "Tele", true)) } ?: emptyList()
+        }
+
+    fun addDevice(d: Device) {
+        val list = listOf(d) + devices.filterNot { it.host == d.host || (d.name.isNotBlank() && it.name == d.name) }
+        val a = JSONArray(); list.forEach { a.put(org.json.JSONObject().put("h", it.host).put("n", it.name).put("tv", it.tv)) }
+        sp.edit().putString("devices", a.toString()).remove("tv").apply(); tick()
+    }
+
+    fun removeDevice(host: String) {
+        val list = devices.filterNot { it.host == host }
+        val a = JSONArray(); list.forEach { a.put(org.json.JSONObject().put("h", it.host).put("n", it.name).put("tv", it.tv)) }
+        sp.edit().putString("devices", a.toString()).remove("tv").apply(); tick()
+    }
+
+    /** La tele para «Ver en la tele» (o el primer aparato conectado). */
+    val tvAddress: String get() = devices.let { l -> (l.firstOrNull { it.tv } ?: l.firstOrNull())?.host.orEmpty() }
+
+    /** "auto", "dark" o "light". */
+    var theme: String
+        get() = sp.getString("theme", "") ?: ""
+        set(v) { sp.edit().putString("theme", v).apply(); tick() }
+
+    // ------------------------------------------------------------------
+    // Pasar la cuenta completa a otro aparato
+    // ------------------------------------------------------------------
+    fun exportAccount(): org.json.JSONObject {
+        val subsA = JSONArray(); _subs.value.forEach { subsA.put(it.toJson()) }
+        val laterA = JSONArray(); _later.value.forEach { laterA.put(it.toJson()) }
+        val histA = JSONArray(); _history.value.take(300).forEach { histA.put(it.toJson()) }
+        return org.json.JSONObject().put("vista", 2).put("subs", subsA).put("later", laterA).put("history", histA)
+            .put("topics", JSONArray(topics)).put("hidden", JSONArray(hiddenVideos.toList())).put("blocked", JSONArray(blockedChannels.toList()))
+            .put("qWifi", qualityWifi).put("qData", qualityData).put("speed", speed.toDouble()).put("sb", sponsorBlock)
+            .put("sbCats", JSONArray(sbCategories.toList())).put("subs_lang", subtitles).put("hideShorts", hideShorts).put("autoplay", autoplay)
+    }
+
+    /** Junta la cuenta que llegó con lo que ya había aquí (no borra nada). Devuelve un resumen. */
+    fun importAccount(o: org.json.JSONObject): String {
+        fun strs(k: String) = o.optJSONArray(k)?.let { a -> List(a.length()) { a.optString(it) } }.orEmpty()
+        val subsIn = o.optJSONArray("subs")?.let { a -> List(a.length()) { Chan.fromJson(a.getJSONObject(it)) } }.orEmpty()
+        val added = subscribeAll(subsIn)
+        o.optJSONArray("later")?.let { a ->
+            val inc = List(a.length()) { Video.fromJson(a.getJSONObject(it)) }
+            val merged = (_later.value + inc).distinctBy { it.id }
+            _later.value = merged; writeArr("later", merged.map { it.toJson() })
+        }
+        var histN = 0
+        o.optJSONArray("history")?.let { a ->
+            val inc = List(a.length()) { Watched.fromJson(a.getJSONObject(it)) }
+            histN = inc.size
+            val merged = (_history.value + inc).groupBy { it.video.id }.values.map { g -> g.maxBy { it.at } }.sortedByDescending { it.at }.take(400)
+            _history.value = merged; writeArr("history", merged.map { it.toJson() })
+        }
+        val t = strs("topics")
+        if (t.isNotEmpty()) topics = (topics + t).distinct()
+        val e = sp.edit()
+        strs("hidden").takeIf { it.isNotEmpty() }?.let { e.putStringSet("hiddenV", hiddenVideos + it) }
+        strs("blocked").takeIf { it.isNotEmpty() }?.let { e.putStringSet("blockedC", blockedChannels + it) }
+        if (o.has("qWifi")) e.putInt("qWifi", o.optInt("qWifi", 1080))
+        if (o.has("qData")) e.putInt("qData", o.optInt("qData", 480))
+        if (o.has("speed")) e.putFloat("speed", o.optDouble("speed", 1.0).toFloat())
+        if (o.has("sb")) e.putBoolean("sb", o.optBoolean("sb", true))
+        strs("sbCats").takeIf { it.isNotEmpty() }?.let { e.putStringSet("sbCats", it.toSet()) }
+        if (o.has("subs_lang")) e.putString("subs_lang", o.optString("subs_lang"))
+        if (o.has("hideShorts")) e.putBoolean("hideShorts", o.optBoolean("hideShorts", true))
+        if (o.has("autoplay")) e.putBoolean("autoplay", o.optBoolean("autoplay", true))
+        e.apply(); tick()
+        return "$added canales nuevos, ${t.size} temas e historial de $histN videos"
+    }
 
     // ------------------------------------------------------------------
     // Gustos (para las recomendaciones)

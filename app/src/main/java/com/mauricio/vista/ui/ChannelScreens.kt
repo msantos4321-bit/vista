@@ -174,7 +174,7 @@ fun SubsScreen() {
         return
     }
 
-    val cols = if (tv) 4 else 1
+    val cols = if (tv) 4 else phoneCols()
     val grid = rememberLazyGridState()
     LazyVerticalGrid(
         columns = GridCells.Fixed(cols), state = grid, modifier = Modifier.fillMaxSize(),
@@ -255,7 +255,7 @@ fun ChannelScreen(url: String, name: String) {
         p == null -> CenterMessage(name.ifBlank { "Canal" }, "Cargando…", loading = true)
         else -> {
             val subscribed = subs.any { s -> s.url == p.chan.url || (s.channelId != null && s.channelId == p.chan.channelId) }
-            val cols = if (tv) 4 else 1
+            val cols = if (tv) 4 else phoneCols()
             val grid = rememberLazyGridState()
             LaunchedEffect(grid) {
                 snapshotFlow { grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }.collect { last ->

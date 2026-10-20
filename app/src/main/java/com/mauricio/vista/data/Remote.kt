@@ -32,6 +32,16 @@ object Remote {
         data class Play(val url: String) : Cmd
         data class Search(val q: String) : Cmd
         data class Imported(val added: Int, val total: Int) : Cmd
+        data class Account(val summary: String) : Cmd
+    }
+
+    /** Lo pone la actividad al arrancar. */
+    var isTv = false
+
+    /** Nombre amable de este aparato («Tele Sala», «Tableta Samsung»…). */
+    fun deviceName(): String {
+        val m = (android.os.Build.MANUFACTURER.replaceFirstChar { it.uppercase() } + " " + android.os.Build.MODEL).let { if (android.os.Build.MODEL.startsWith(android.os.Build.MANUFACTURER, true)) android.os.Build.MODEL else it }
+        return (if (isTv) "Tele " else "") + m
     }
 
     private val _cmds = MutableSharedFlow<Cmd>(extraBufferCapacity = 8)
@@ -94,7 +104,12 @@ object Remote {
 
         val (code, type, out) = when {
             method == "GET" && (path == "/" || path == "/index.html") -> Triple(200, "text/html; charset=utf-8", page().toByteArray())
-            method == "GET" && path == "/estado" -> Triple(200, "application/json", JSONObject().put("ok", true).put("app", "Vista").put("modelo", android.os.Build.MODEL).toString().toByteArray())
+            method == "GET" && path == "/estado" -> Triple(200, "application/json", JSONObject().put("ok", true).put("app", "Vista").put("modelo", android.os.Build.MODEL).put("nombre", deviceName()).put("tv", isTv).toString().toByteArray())
+            method == "POST" && path == "/cuenta" -> {
+                val r = runCatching { Store.importAccount(JSONObject(String(body, Charsets.UTF_8))) }
+                r.getOrNull()?.let { _cmds.tryEmit(Cmd.Account(it)) }
+                Triple(if (r.isSuccess) 200 else 400, "application/json", JSONObject().put("ok", r.isSuccess).put("resumen", r.getOrNull() ?: "").toString().toByteArray())
+            }
             method == "POST" && path == "/ver" -> {
                 val url = Yt.findLink(String(body)) ?: Yt.videoId(String(body).trim())?.let { Yt.watchUrl(it) }
                 if (url != null) { _cmds.tryEmit(Cmd.Play(url)); Triple(200, "application/json", """{"ok":true}""".toByteArray()) }
@@ -213,8 +228,8 @@ object Remote {
     // ------------------------------------------------------------------
     private val http by lazy { Net.client.newBuilder().connectTimeout(4, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS).build() }
 
-    private suspend fun post(path: String, body: ByteArray, type: String): Boolean = withContext(Dispatchers.IO) {
-        val host = Store.tvAddress.ifBlank { return@withContext false }
+    private suspend fun post(path: String, body: ByteArray, type: String, to: String = Store.tvAddress): Boolean = withContext(Dispatchers.IO) {
+        val host = to.ifBlank { return@withContext false }
         runCatching {
             http.newCall(Request.Builder().url("http://$host$path").post(body.toRequestBody(type.toMediaType())).build()).execute().use { it.isSuccessful }
         }.getOrDefault(false)
@@ -223,6 +238,8 @@ object Remote {
     suspend fun sendPlay(url: String) = post("/ver", url.toByteArray(), "text/plain")
     suspend fun sendSearch(q: String) = post("/buscar", q.toByteArray(), "text/plain")
     suspend fun sendSubs() = post("/importar", exportJson().toByteArray(), "application/json")
+    /** Pasa la cuenta completa (suscripciones, temas, «Ver después», historial y ajustes). */
+    suspend fun sendAccount(host: String) = post("/cuenta", Store.exportAccount().toString().toByteArray(), "application/json", host)
 
     suspend fun ping(host: String): Boolean = withContext(Dispatchers.IO) {
         runCatching {
@@ -238,29 +255,29 @@ object Remote {
         return """<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Vista · Control</title>
 <style>
-:root{--bg:#0B0C10;--p:#16181F;--p2:#222530;--hi:#F5F5F7;--mid:#B8BCC8;--low:#7C8191;--ac:#FF5B3A;--ac2:#E82E6C}
+:root{--bg:#161A20;--p:#222831;--p2:#2B323D;--hi:#E9ECF1;--mid:#B3BAC5;--low:#858D9A;--ac:#7FB3FF;--ac2:#6FD3C3}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--hi);font:16px/1.45 -apple-system,system-ui,Segoe UI,Roboto,sans-serif;padding:20px 16px 40px}
 h1{font-size:26px;margin:4px 0 2px}.sub{color:var(--low);margin:0 0 18px}
 .card{background:var(--p);border-radius:16px;padding:16px;margin:0 0 14px}
 .card h2{font-size:17px;margin:0 0 4px}.card p{color:var(--mid);font-size:14px;margin:0 0 10px}
-input,textarea{width:100%;background:var(--p2);color:var(--hi);border:1px solid #2E3240;border-radius:12px;padding:12px;font:inherit}
+input,textarea{width:100%;background:var(--p2);color:var(--hi);border:1px solid #3A4250;border-radius:12px;padding:12px;font:inherit}
 textarea{min-height:90px}
-button,.btn{display:inline-block;margin-top:10px;width:100%;border:0;border-radius:12px;padding:13px;font:600 16px inherit;color:#fff;background:linear-gradient(135deg,var(--ac),var(--ac2));text-align:center;text-decoration:none}
+button,.btn{display:inline-block;margin-top:10px;width:100%;border:0;border-radius:12px;padding:13px;font:600 16px inherit;color:#0E1A2B;background:linear-gradient(135deg,var(--ac),var(--ac2));text-align:center;text-decoration:none}
 .msg{margin-top:8px;font-size:14px;color:var(--mid);min-height:1em}
-.logo{display:inline-grid;place-items:center;width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,var(--ac),var(--ac2));font-size:22px;vertical-align:middle;margin-right:8px}
+.logo{display:inline-grid;place-items:center;width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,var(--ac),var(--ac2));font-size:22px;vertical-align:middle;margin-right:8px;color:#0E1A2B}
 </style></head><body>
-<h1><span class="logo">▶</span>Vista</h1><p class="sub">Control de la tele desde tu celular</p>
-<div class="card"><h2>Conectar la app Vista del celular</h2><p>Si ya tienes Vista en este celular, toca aquí y quedará conectado a esta tele para mandarle videos con un botón.</p>
-<a class="btn" href="vista://tele?h=$host">Conectar mi app Vista</a></div>
-<div class="card"><h2>Mandar un video a la tele</h2><p>Pega una liga de YouTube (también puedes compartirla desde la app de YouTube y copiarla).</p>
-<input id="u" placeholder="https://youtu.be/…"><button onclick="send('/ver',u.value,'m1')">Ver en la tele</button><div class="msg" id="m1"></div></div>
-<div class="card"><h2>Buscar en la tele</h2><p>Escribe aquí en lugar de usar el control.</p>
+<h1><span class="logo">▶</span>Vista</h1><p class="sub">Control de ${deviceName()} desde tu celular</p>
+<div class="card"><h2>Pasar mi cuenta / conectar mi app</h2><p>Si ya tienes Vista en este celular, toca aquí: queda conectado y te ofrece pasar tu cuenta completa (suscripciones, temas, «Ver después» e historial) a ${deviceName()}.</p>
+<a class="btn" href="vista://tele?h=$host&n=${java.net.URLEncoder.encode(deviceName(), "UTF-8")}&tv=${if (isTv) 1 else 0}">Conectar mi app Vista</a></div>
+<div class="card"><h2>Mandar un video aquí</h2><p>Pega una liga de YouTube (también puedes compartirla desde la app de YouTube y copiarla).</p>
+<input id="u" placeholder="https://youtu.be/…"><button onclick="send('/ver',u.value,'m1')">Ver en ${deviceName()}</button><div class="msg" id="m1"></div></div>
+<div class="card"><h2>Buscar</h2><p>Escribe aquí en lugar de usar el control.</p>
 <input id="q" placeholder="¿Qué quieres ver?"><button onclick="send('/buscar',q.value,'m2')">Buscar</button><div class="msg" id="m2"></div></div>
 <div class="card"><h2>Pasar mis suscripciones</h2><p>Sube el archivo de Google Takeout (el .zip completo o «subscriptions.csv»), o pega ligas de canales, una por línea.</p>
 <input type="file" id="f"><button onclick="up()">Subir archivo</button>
 <textarea id="t" placeholder="https://www.youtube.com/@canal"></textarea><button onclick="send('/importar',t.value,'m3')">Agregar canales</button><div class="msg" id="m3"></div></div>
 <script>
-async function send(p,b,m){const e=document.getElementById(m);e.textContent='Enviando…';try{const r=await fetch(p,{method:'POST',body:b});const j=await r.json();e.textContent=j.ok?(j.nuevos!==undefined?('Listo: '+j.nuevos+' canales nuevos de '+j.total+'.'):'¡Listo! Mira la tele.'):(j.error||'No se pudo');}catch(x){e.textContent='No se pudo conectar con la tele. Revisa que Vista esté abierta.';}}
+async function send(p,b,m){const e=document.getElementById(m);e.textContent='Enviando…';try{const r=await fetch(p,{method:'POST',body:b});const j=await r.json();e.textContent=j.ok?(j.nuevos!==undefined?('Listo: '+j.nuevos+' canales nuevos de '+j.total+'.'):'¡Listo!'):(j.error||'No se pudo');}catch(x){e.textContent='No se pudo conectar. Revisa que Vista esté abierta en el otro aparato.';}}
 async function up(){const fl=f.files[0];if(!fl){m3.textContent='Elige primero el archivo.';return;}m3.textContent='Subiendo y revisando canales… (puede tardar un minuto)';const b=await fl.arrayBuffer();send('/importar',b,'m3');}
 </script></body></html>"""
     }

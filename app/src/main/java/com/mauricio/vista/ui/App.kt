@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
@@ -84,6 +85,9 @@ val LocalNav = staticCompositionLocalOf<Nav> { error("sin navegación") }
 /** Liga que llegó de fuera (compartir desde YouTube, link, control desde el celular). */
 val incomingLink = mutableStateOf<String?>(null)
 
+/** Aparato recién conectado con el enlace de su página: se ofrece pasarle la cuenta. */
+val linkedDevice = mutableStateOf<com.mauricio.vista.data.Store.Device?>(null)
+
 /** Video abierto en la tele a pedido del celular, para el menú de opciones (clic largo). */
 val videoMenu = mutableStateOf<Video?>(null)
 
@@ -115,6 +119,11 @@ fun App() {
                 is Remote.Cmd.Play -> nav.play(Video(url = c.url, title = "Cargando…"))
                 is Remote.Cmd.Search -> nav.go(Route.Search(c.q))
                 is Remote.Cmd.Imported -> Toast.show(if (c.added > 0) "Se agregaron ${c.added} canales a tus suscripciones" else "Esos canales ya estaban en tus suscripciones")
+                is Remote.Cmd.Account -> {
+                    Toast.show("Cuenta recibida: ${c.summary}")
+                    runCatching { com.mauricio.vista.data.Feed.refresh(force = true) }
+                    runCatching { com.mauricio.vista.data.Recs.refresh(force = true) }
+                }
             }
         }
     }
@@ -127,6 +136,12 @@ fun App() {
         }
     }
 
+    // Colores: se revisa cada minuto (modo automático) y al cambiar el ajuste
+    val tick by com.mauricio.vista.data.Store.settingsTick.collectAsState()
+    LaunchedEffect(tick) { C.apply(com.mauricio.vista.data.Store.theme) }
+    LaunchedEffect(Unit) { while (true) { kotlinx.coroutines.delay(60_000); C.apply(com.mauricio.vista.data.Store.theme) } }
+    LaunchedEffect(C.dark) { DeviceUi.styleBars(C.dark) }
+
     val top = stack.last()
     BackHandler(enabled = stack.size > 1 || top != Route.Home) { nav.back() }
 
@@ -138,6 +153,7 @@ fun App() {
                 else -> PhoneShell(top)
             }
             videoMenu.value?.let { v -> VideoMenu(v) { videoMenu.value = null } }
+            linkedDevice.value?.let { d -> LinkedDeviceDialog(d) { linkedDevice.value = null } }
             Toast.Host()
             AutoUpdateCheck()
         }
@@ -205,7 +221,7 @@ private fun Sidebar(current: Route, onSelect: (Route) -> Unit) {
         // Logo
         Row(Modifier.padding(start = 6.dp, bottom = 26.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(36.dp).clip(RoundedCornerShape(10.dp)).background(C.gradient), contentAlignment = Alignment.Center) {
-                Text("▶", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Text("▶", color = C.OnAccent, fontSize = 16.sp, fontWeight = FontWeight.Bold)
             }
             if (expanded) Text("  Vista", color = C.Hi, fontSize = 20.sp, fontWeight = FontWeight.Bold)
         }

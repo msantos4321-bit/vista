@@ -112,3 +112,14 @@ fun LandscapeWhilePlaying() {
         onDispose { DeviceUi.setPlaying(false) }
     }
 }
+
+/** Columnas de videos fuera de la tele: 1 en celular, 2 o 3 en tableta (según el ancho). */
+@Composable
+fun phoneCols(): Int {
+    val w = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp
+    return when {
+        w >= 1000 -> 3
+        w >= 600 -> 2
+        else -> 1
+    }
+}

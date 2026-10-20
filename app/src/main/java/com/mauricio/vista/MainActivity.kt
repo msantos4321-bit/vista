@@ -26,8 +26,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         DeviceUi.init(this)
         if (!DeviceUi.isTv) enableEdgeToEdge()
-        // La tele escucha al celular (mandar videos, búsquedas y suscripciones)
-        if (DeviceUi.isTv) Remote.startServer()
+        com.mauricio.vista.ui.C.apply(Store.theme)
+        // Todos los aparatos escuchan en la red de la casa: así se puede pasar la cuenta a una tele, tableta u otro celular
+        Remote.isTv = DeviceUi.realTv
+        Remote.startServer()
         if (savedInstanceState == null) readIntent(intent)
         setContent {
             if (DeviceUi.isTv) {
@@ -54,7 +56,11 @@ class MainActivity : ComponentActivity() {
                 val d = i.data ?: return
                 if (d.scheme == "vista") {
                     // vista://tele?h=192.168.1.20:8723 → este celular queda conectado a esa tele
-                    d.getQueryParameter("h")?.takeIf { it.isNotBlank() }?.let { Store.tvAddress = it; Toast.show("Listo: este celular ya está conectado a la tele") }
+                    d.getQueryParameter("h")?.takeIf { it.isNotBlank() }?.let { h ->
+                        val dev = Store.Device(h, d.getQueryParameter("n").orEmpty().ifBlank { "Otro aparato" }, d.getQueryParameter("tv") != "0")
+                        Store.addDevice(dev)
+                        com.mauricio.vista.ui.linkedDevice.value = dev
+                    }
                 } else incomingLink.value = d.toString()
             }
         }

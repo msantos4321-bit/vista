@@ -93,7 +93,7 @@ fun LibraryScreen() {
         item {
             Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 LinkRow(Icons.Filled.Download, "Descargas", Fmt.bytes(Downloads.items.value.filter { it.done }.sumOf { it.size })) { nav.go(Route.Downloads) }
-                LinkRow(Icons.Filled.Cast, "Conectar con la tele", if (Store.tvAddress.isBlank()) "Sin conectar" else "Conectada") { nav.go(Route.Connect) }
+                LinkRow(Icons.Filled.Cast, "Otros aparatos (tele, tableta)", Store.devices.size.let { if (it == 0) "Sin conectar" else "$it conectados" }) { nav.go(Route.Connect) }
                 LinkRow(Icons.Filled.Settings, "Ajustes", "Calidad, subtítulos, importar…") { nav.go(Route.Settings) }
             }
         }
@@ -138,7 +138,7 @@ fun LinkRow(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String
     ) {
         Row(Modifier.padding(horizontal = 14.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(32.dp).background(C.gradient, RoundedCornerShape(9.dp)), contentAlignment = Alignment.Center) {
-                Icon(icon, null, Modifier.size(18.dp), tint = androidx.compose.ui.graphics.Color.White)
+                Icon(icon, null, Modifier.size(18.dp), tint = C.OnAccent)
             }
             Spacer(Modifier.width(12.dp))
             Text(title, fontSize = 16.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
@@ -241,6 +241,11 @@ fun SettingsScreen() {
             ActionButton("", { nav.back() }, icon = Icons.AutoMirrored.Filled.ArrowBack)
             PhoneTopBar("Ajustes")
         }
+        Group("Apariencia")
+        SettingRow("Colores", themeLabel(Store.theme)) {
+            choice = Choice("Colores", listOf("" to "Recomendado (" + (if (tv) "noche suave" else "automático") + ")", "dark" to "Noche suave", "light" to "Claro", "auto" to "Automático (claro de día)"), Store.theme) { Store.theme = it as String }
+        }
+
         Group("Video")
         SettingRow(if (tv) "Calidad máxima" else "Calidad en Wi-Fi", Fmt.quality(Store.qualityWifi), Modifier.focusRequester(first)) {
             choice = Choice("Calidad máxima" + if (tv) "" else " en Wi-Fi", qualities.map { it to Fmt.quality(it) }, Store.qualityWifi) { Store.qualityWifi = it as Int }
@@ -272,7 +277,7 @@ fun SettingsScreen() {
 
         Group("Suscripciones (${subs.size})")
         if (tv) {
-            SettingRow("Pasar suscripciones desde el celular", "Abrir") { nav.go(Route.Connect) }
+            SettingRow("Conectar el celular / recibir cuenta", "Abrir") { nav.go(Route.Connect) }
         } else {
             SettingRow("Importar de YouTube (Google Takeout)", if (importing) "Importando…" else "Elegir archivo") { picker.launch("*/*") }
             Text(
@@ -287,7 +292,7 @@ fun SettingsScreen() {
                     ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("application/json").putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), "Compartir suscripciones"))
                 }
             }
-            SettingRow("Conectar con la tele", if (Store.tvAddress.isBlank()) "Sin conectar" else "Conectada") { nav.go(Route.Connect) }
+            SettingRow("Conectar otro aparato / pasar mi cuenta", Store.devices.size.let { if (it == 0) "Ninguno" else "$it conectados" }) { nav.go(Route.Connect) }
         }
 
         Group("Otros")
@@ -307,6 +312,7 @@ fun SettingsScreen() {
     if (sbOpen) SponsorDialog { sbOpen = false }
 }
 
+private fun themeLabel(t: String) = when (t) { "dark" -> "Noche suave"; "light" -> "Claro"; "auto" -> "Automático"; else -> "Recomendado" }
 private fun speedLabel(s: Float) = if (s == 1f) "Normal" else ("" + s).trimEnd('0').trimEnd('.') + "×"
 private fun subLabel(s: String) = when (s) { "" -> "Apagados"; "es" -> "Español"; "en" -> "Inglés"; else -> s }
 private fun scaleLabel(s: Float) = when { s <= 1f -> "Normal"; s <= 1.3f -> "Mediano"; s <= 1.6f -> "Grande"; else -> "Muy grande" }
@@ -375,28 +381,37 @@ private fun SponsorDialog(onClose: () -> Unit) {
 }
 
 // ======================================================================
-// Conectar celular y tele
+// Conectar aparatos de la casa (tele, tableta, celulares) y pasar la cuenta
 // ======================================================================
 @Composable
 fun ConnectScreen() {
     val nav = LocalNav.current
     val tv = DeviceUi.isTv
     val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val tick by Store.settingsTick.collectAsState()
+    val addr = remember { Remote.address() }
+    val devices = if (tick >= 0) Store.devices else emptyList()
+    val status = remember { androidx.compose.runtime.mutableStateMapOf<String, String>() }
+    LaunchedEffect(devices.size) {
+        devices.forEach { d -> status[d.host] = "Buscando…"; status[d.host] = if (Remote.ping(d.host)) "En línea" else "No responde" }
+    }
+
+    val receive: @Composable () -> Unit = {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(if (tv) "Usa tu celular como control" else "Recibir en este aparato", color = C.Hi, fontSize = if (tv) 28.sp else 20.sp, fontWeight = FontWeight.Bold)
+            Text(
+                "Con la cámara del celular que ya tiene tu cuenta (conectado al mismo Wi-Fi), escanea el código. En la página que se abre toca «Conectar mi app Vista» y luego «Pasar mi cuenta». Desde ahí también puedes mandar videos o escribir búsquedas.",
+                color = C.Mid, fontSize = if (tv) 16.sp else 14.sp,
+            )
+            if (addr != null) Text("O abre en el navegador del celular:  $addr", color = C.Low, fontSize = 13.sp)
+            else Text("Este aparato no está conectado a la red de la casa (Wi-Fi).", color = C.Warn, fontSize = 14.sp)
+        }
+    }
+
     if (tv) {
-        val addr = remember { Remote.address() }
         Row(Modifier.fillMaxSize().padding(40.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(40.dp)) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Usa tu celular como control", color = C.Hi, fontSize = 28.sp, fontWeight = FontWeight.Bold)
-                Text("Escanea el código con la cámara del celular (conectado al mismo Wi-Fi que la tele). Desde ahí puedes:", color = C.Mid, fontSize = 16.sp)
-                listOf(
-                    "Mandar a la tele un video que encontraste en el celular",
-                    "Escribir búsquedas sin usar el control",
-                    "Pasar todas tus suscripciones de YouTube de una vez",
-                    "Conectar la app Vista del celular para el botón «Ver en la tele»",
-                ).forEach { Text("•  $it", color = C.Hi, fontSize = 15.sp) }
-                Spacer(Modifier.height(8.dp))
-                if (addr != null) Text("O escribe en el navegador del celular:  $addr", color = C.Low, fontSize = 14.sp)
-                else Text("La tele no está conectada a la red de la casa.", color = C.Warn, fontSize = 14.sp)
+                receive()
                 Spacer(Modifier.height(6.dp))
                 ActionButton("Regresar", { nav.back() })
             }
@@ -405,31 +420,66 @@ fun ConnectScreen() {
         return
     }
 
-    var host by remember { mutableStateOf(Store.tvAddress) }
-    var status by remember { mutableStateOf("") }
-    LaunchedEffect(host) {
-        if (host.isBlank()) return@LaunchedEffect
-        status = "Buscando la tele…"
-        status = if (Remote.ping(host)) "Conectada ✓" else "No responde. ¿Está prendida con Vista abierta y en el mismo Wi-Fi?"
-    }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             ActionButton("", { nav.back() }, icon = Icons.AutoMirrored.Filled.ArrowBack)
-            PhoneTopBar("Conectar con la tele")
+            PhoneTopBar("Otros aparatos")
         }
-        Text(
-            "1. En la tele abre Vista → Ajustes → «Pasar suscripciones desde el celular».\n" +
-                "2. Escanea con la cámara el código que aparece.\n" +
-                "3. En la página que se abre toca «Conectar mi app Vista».",
-            color = C.Mid, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 6.dp),
-        )
-        if (host.isNotBlank()) {
-            SettingRow("Tele", host) {}
-            Text(status, color = if (status.startsWith("Conectada")) C.Good else C.Low, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 6.dp))
-            SettingRow("Mandar mis suscripciones a la tele", "Enviar") {
-                scope.launch { Toast.show(if (Remote.sendSubs()) "Listo, ya están en la tele" else "No encontré la tele") }
+        // Aparatos conectados desde aquí
+        Text("CONECTADOS", color = C.Accent, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 6.dp, top = 6.dp))
+        if (devices.isEmpty()) {
+            Text("Todavía no conectas otro aparato. En la tele o tableta abre Vista → Ajustes → «Conectar…» y escanea su código con este celular.", color = C.Mid, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 6.dp))
+        }
+        devices.forEach { d ->
+            Column(Modifier.fillMaxWidth().background(C.Panel, RoundedCornerShape(16.dp)).padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.Cast, null, tint = C.Accent)
+                    Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                        Text(d.name.ifBlank { "Aparato" }, color = C.Hi, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                        Text(d.host + "  ·  " + (status[d.host] ?: ""), color = if (status[d.host] == "En línea") C.Good else C.Low, fontSize = 12.sp)
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ActionButton("Pasar mi cuenta", {
+                        scope.launch { Toast.show(if (Remote.sendAccount(d.host)) "Listo: tu cuenta ya está en ${d.name}" else "No encontré ${d.name}. ¿Está prendido con Vista abierta?") }
+                    }, primary = true)
+                    ActionButton("Olvidar", { Store.removeDevice(d.host) })
+                }
             }
-            SettingRow("Olvidar esta tele", "") { Store.tvAddress = ""; host = "" }
+        }
+        Spacer(Modifier.height(10.dp))
+        Column(Modifier.fillMaxWidth().background(C.Panel, RoundedCornerShape(16.dp)).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            receive()
+            Spacer(Modifier.height(12.dp))
+            if (addr != null) QrCode(addr, Modifier.size(220.dp))
+        }
+        Spacer(Modifier.height(30.dp))
+    }
+}
+
+/** Al conectar con el enlace de otro aparato: ofrece pasarle la cuenta. */
+@Composable
+fun LinkedDeviceDialog(d: Store.Device, onClose: () -> Unit) {
+    val fr = remember { FocusRequester() }
+    var sending by remember { mutableStateOf(false) }
+    Dialog(onDismissRequest = onClose) {
+        Column(Modifier.width(380.dp).background(C.Panel, RoundedCornerShape(22.dp)).padding(22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Conectado a ${d.name}", color = C.Hi, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+            Text("¿Le paso tu cuenta? Se copian tus suscripciones, temas, «Ver después», historial y ajustes. No se borra nada de lo que ya tenga.", color = C.Mid, fontSize = 14.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                ActionButton(if (sending) "Pasando…" else "Pasar mi cuenta", {
+                    if (!sending) {
+                        sending = true
+                        uiScope.launch {
+                            val ok = Remote.sendAccount(d.host)
+                            Toast.show(if (ok) "Listo: tu cuenta ya está en ${d.name}" else "No pude llegar a ${d.name}. Revisa que estén en el mismo Wi-Fi.")
+                            onClose()
+                        }
+                    }
+                }, Modifier.focusRequester(fr), primary = true)
+                ActionButton("Solo conectar", onClose)
+            }
         }
     }
+    LaunchedEffect(Unit) { runCatching { fr.requestFocus() } }
 }
