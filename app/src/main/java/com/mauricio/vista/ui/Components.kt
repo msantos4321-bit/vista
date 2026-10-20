@@ -164,8 +164,10 @@ fun VideoCard(
         ) { Thumb(v, progress, Modifier.fillMaxSize()) }
         Spacer(Modifier.height(8.dp))
         Text(v.title, color = if (focused) C.Hi else C.Mid, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 17.sp)
-        val meta = Fmt.meta(v, showChannel)
-        if (meta.isNotBlank()) Text(meta, color = C.Low, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
+        // Canal en su renglón y abajo «hace cuánto · vistas», para que la fecha siempre se alcance a leer
+        if (showChannel && v.channel.isNotBlank()) Text(v.channel, color = C.Low, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
+        val wv = Fmt.whenViews(v)
+        if (wv.isNotBlank()) Text(wv, color = if (focused) C.Mid else C.Low, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -191,7 +193,7 @@ fun PhoneVideoCard(
             Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                 Text(v.title, color = C.Hi, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 20.sp)
                 val meta = Fmt.meta(v, showChannel)
-                if (meta.isNotBlank()) Text(meta, color = C.Low, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 3.dp))
+                if (meta.isNotBlank()) Text(meta, color = C.Low, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 3.dp))
             }
         }
     }
@@ -200,22 +202,26 @@ fun PhoneVideoCard(
 /** Renglón compacto (miniatura chica a la izquierda): para «Siguiente» y listas largas. */
 @Composable
 fun VideoRow(v: Video, onClick: () -> Unit, modifier: Modifier = Modifier, progress: Float = 0f, onLongClick: (() -> Unit)? = null, trailing: (@Composable () -> Unit)? = null) {
-    Surface(
-        onClick = onClick, onLongClick = onLongClick,
-        modifier = modifier.fillMaxWidth(),
-        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp)),
-        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f),
-        colors = ClickableSurfaceDefaults.colors(containerColor = Color.Transparent, focusedContainerColor = C.Panel2, pressedContainerColor = C.Panel),
-    ) {
-        Row(Modifier.padding(6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Thumb(v, progress, Modifier.width(150.dp).aspectRatio(16f / 9f).clip(RoundedCornerShape(10.dp)))
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(v.title, color = C.Hi, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 18.sp)
-                Text(Fmt.meta(v), color = C.Low, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
+    // Los botones de la derecha (+, subir, quitar…) van fuera de la tarjeta: así en la tele se llega a ellos con ▶
+    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Surface(
+            onClick = onClick, onLongClick = onLongClick,
+            modifier = Modifier.weight(1f),
+            shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp)),
+            scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f),
+            colors = ClickableSurfaceDefaults.colors(containerColor = Color.Transparent, focusedContainerColor = C.Panel2, pressedContainerColor = C.Panel),
+        ) {
+            Row(Modifier.padding(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Thumb(v, progress, Modifier.width(150.dp).aspectRatio(16f / 9f).clip(RoundedCornerShape(10.dp)))
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(v.title, color = C.Hi, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 18.sp)
+                    if (v.channel.isNotBlank()) Text(v.channel, color = C.Low, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
+                    Text(Fmt.whenViews(v), color = C.Low, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
-            trailing?.invoke()
         }
+        trailing?.invoke()
     }
 }
 

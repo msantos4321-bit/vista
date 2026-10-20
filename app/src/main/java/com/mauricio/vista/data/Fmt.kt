@@ -43,11 +43,20 @@ object Fmt {
 
     private fun plural(n: Long, w: String) = "hace $n $w" + if (n == 1L) "" else "s"
 
-    /** «Canal · 12 mil vistas · hace 2 días» */
+    /** «hace 2 días · 12 mil vistas» (lo reciente primero, que es lo que más importa). */
+    fun whenViews(v: Video): String = listOfNotNull(
+        if (v.live) "EN VIVO" else (v.uploaded.ifBlank { ago(v.publishedMs) }).takeIf { it.isNotBlank() }?.let { shortAgo(it) },
+        if (v.live) null else views(v.views).takeIf { it.isNotBlank() },
+    ).joinToString(" · ")
+
+    /** «hace 2 semanas» → «hace 2 sem.» para que quepa. */
+    fun shortAgo(t: String): String = t.replace("semanas", "sem.").replace("semana", "sem.").replace("minutos", "min").replace("minuto", "min")
+        .replace("Transmitido ", "").replace("Streamed ", "")
+
+    /** «Canal · hace 2 días · 12 mil vistas» */
     fun meta(v: Video, withChannel: Boolean = true): String = listOfNotNull(
         v.channel.takeIf { withChannel && it.isNotBlank() },
-        if (v.live) "EN VIVO" else views(v.views).takeIf { it.isNotBlank() },
-        v.uploaded.takeIf { it.isNotBlank() && !v.live } ?: ago(v.publishedMs).takeIf { it.isNotBlank() && !v.live },
+        whenViews(v).takeIf { it.isNotBlank() },
     ).joinToString(" · ")
 
     fun quality(h: Int): String = when {
