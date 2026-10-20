@@ -29,6 +29,7 @@ class VistaApp : Application(), ImageLoaderFactory {
         Yt.init()
         com.mauricio.vista.data.Profiles.init(this)
         Store.init(this)
+        com.mauricio.vista.data.License.init(this)
         Feed.init(this)
         com.mauricio.vista.data.Recs.init(this)
         com.mauricio.vista.data.Queue.init(this)

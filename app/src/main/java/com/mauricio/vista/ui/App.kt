@@ -199,6 +199,7 @@ fun App() {
         }
     }
 
+    val lic by com.mauricio.vista.data.License.state.collectAsState()
     val profile by com.mauricio.vista.data.Profiles.current.collectAsState()
     LaunchedEffect(profile.id) { activePlayer.value = null; stack.clear(); stack.add(Route.Home); memories.clear() }
 
@@ -206,6 +207,7 @@ fun App() {
         key(profile.id) { Box(Modifier.fillMaxSize().background(C.Bg)) {
             when {
                 recovering -> RecoveryScreen { recovering = false; com.mauricio.vista.data.Store.clearCrash() }
+                lic != com.mauricio.vista.data.License.State.Ok -> ActivationScreen(lic)
                 choosing || profilePickerOpen.value -> ProfilePicker { choosing = false; profilePickerOpen.value = false }
                 player != null && !mini -> playerContent(false)
                 DeviceUi.isTv -> TvShell(top)
@@ -215,6 +217,7 @@ fun App() {
             linkedDevice.value?.let { d -> LinkedDeviceDialog(d) { linkedDevice.value = null } }
             saveToListVideo.value?.let { vs -> SaveToListDialog(vs) { saveToListVideo.value = null } }
             if (profileManagerOpen.value) ProfileManager { profileManagerOpen.value = false }
+            if (subscriptionOpen.value) SubscriptionDialog { subscriptionOpen.value = false }
             Toast.Host()
             AutoUpdateCheck()
         } }

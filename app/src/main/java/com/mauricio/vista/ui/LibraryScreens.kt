@@ -270,6 +270,8 @@ fun SettingsScreen() {
             ActionButton("", { nav.back() }, icon = Icons.AutoMirrored.Filled.ArrowBack)
             PhoneTopBar("Ajustes")
         }
+        Group("Suscripción")
+        SettingRow("Tu suscripción", com.mauricio.vista.data.License.code.ifBlank { "Sin código" }) { subscriptionOpen.value = true }
         Group("Perfiles")
         SettingRow("Cambiar de perfil", com.mauricio.vista.data.Profiles.current.value.name) { profilePickerOpen.value = true }
         SettingRow("Administrar perfiles (agregar, infantil, PIN)", "${com.mauricio.vista.data.Profiles.list.value.size}") { profileManagerOpen.value = true }

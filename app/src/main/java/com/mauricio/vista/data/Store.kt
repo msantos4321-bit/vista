@@ -249,6 +249,7 @@ object Store {
             .put("qWifi", qualityWifi).put("qData", qualityData).put("speed", speed.toDouble()).put("sb", sponsorBlock)
             .put("sbCats", JSONArray(sbCategories.toList())).put("subs_lang", subtitles).put("hideShorts", hideShorts).put("autoplay", autoplay)
             .put("listas", Playlists.toJson())
+            .put("lic", License.code)
     }
 
     /** Junta la cuenta que llegó con lo que ya había aquí (no borra nada). Devuelve un resumen. */
@@ -283,6 +284,7 @@ object Store {
         if (o.has("autoplay")) e.putBoolean("autoplay", o.optBoolean("autoplay", true))
         e.apply(); tick()
         o.optJSONArray("listas")?.let { runCatching { Playlists.merge(it) } }
+        License.adopt(o.optString("lic"))
         return "$added canales nuevos, ${t.size} temas e historial de $histN videos"
     }
 
