@@ -68,6 +68,10 @@ sealed interface Route {
     data object Settings : Route
     data object Connect : Route
     data class Channel(val url: String, val name: String = "") : Route
+    /** Lista de reproducción de YouTube. */
+    data class Playlist(val url: String, val name: String = "") : Route
+    /** Lista guardada por la persona. */
+    data class MyList(val id: String) : Route
     data class Player(val video: Video, val queue: List<Video> = emptyList(), val audioOnly: Boolean = false) : Route
 }
 
@@ -77,7 +81,21 @@ class Nav(
     val back: () -> Unit,
     val memory: (String) -> FocusMemory,
 ) {
-    fun play(v: Video, queue: List<Video> = emptyList(), audioOnly: Boolean = false) = go(Route.Player(v, queue.filter { it.id != v.id }, audioOnly))
+    /** Abre un video; [queue] es la fila de donde vino (se usa si la cola «A continuación» está vacía). */
+    fun play(v: Video, queue: List<Video> = emptyList(), audioOnly: Boolean = false) {
+        com.mauricio.vista.data.Queue.context = queue.filter { it.id != v.id }
+        go(Route.Player(v, emptyList(), audioOnly))
+    }
+
+    /** Pasa al siguiente sin cambiar la fila de origen (lo usa el reproductor). */
+    fun continueWith(v: Video, audioOnly: Boolean = false) = go(Route.Player(v, emptyList(), audioOnly))
+
+    /** Reproduce una lista completa en orden (o revuelta). */
+    fun playAll(list: List<Video>, shuffle: Boolean = false) {
+        val l = if (shuffle) list.shuffled() else list
+        val first = l.firstOrNull() ?: return
+        play(first, l.drop(1))
+    }
     fun channel(c: Chan) = go(Route.Channel(c.url, c.name))
     fun channel(url: String, name: String) = go(Route.Channel(url, name))
 }
@@ -162,6 +180,7 @@ fun App() {
             }
             videoMenu.value?.let { v -> VideoMenu(v) { videoMenu.value = null } }
             linkedDevice.value?.let { d -> LinkedDeviceDialog(d) { linkedDevice.value = null } }
+            saveToListVideo.value?.let { vs -> SaveToListDialog(vs) { saveToListVideo.value = null } }
             Toast.Host()
             AutoUpdateCheck()
         }
@@ -182,6 +201,8 @@ private fun Screen(top: Route) {
         Route.Settings -> SettingsScreen()
         Route.Connect -> ConnectScreen()
         is Route.Channel -> key(top) { ChannelScreen(top.url, top.name) }
+        is Route.Playlist -> key(top) { YtPlaylistScreen(top.url, top.name) }
+        is Route.MyList -> key(top) { MyListScreen(top.id) }
         is Route.Player -> {}
     }
 }
@@ -195,7 +216,7 @@ private val tvItems = listOf(
     NavItem("Buscar", Icons.Filled.Search, Route.Search()) { it is Route.Search },
     NavItem("Inicio", Icons.Filled.Home, Route.Home) { it == Route.Home },
     NavItem("Suscripciones", Icons.Filled.Subscriptions, Route.Subs) { it == Route.Subs || it is Route.Channel },
-    NavItem("Biblioteca", Icons.Filled.VideoLibrary, Route.Library) { it == Route.Library },
+    NavItem("Biblioteca", Icons.Filled.VideoLibrary, Route.Library) { it == Route.Library || it is Route.MyList },
     NavItem("Ajustes", Icons.Filled.Settings, Route.Settings) { it == Route.Settings || it == Route.Connect },
 )
 
@@ -280,7 +301,7 @@ private val phoneTabs = listOf(
     Tab("Suscripciones", Icons.Filled.Subscriptions, Route.Subs) { it == Route.Subs || it is Route.Channel },
     Tab("Buscar", Icons.Filled.Search, Route.Search()) { it is Route.Search },
     Tab("Descargas", Icons.Filled.Download, Route.Downloads) { it == Route.Downloads },
-    Tab("Biblioteca", Icons.Filled.VideoLibrary, Route.Library) { it == Route.Library || it == Route.Settings || it == Route.Connect },
+    Tab("Biblioteca", Icons.Filled.VideoLibrary, Route.Library) { it == Route.Library || it == Route.Settings || it == Route.Connect || it is Route.MyList },
 )
 
 @Composable

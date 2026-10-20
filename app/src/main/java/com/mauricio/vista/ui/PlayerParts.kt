@@ -8,6 +8,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -33,6 +34,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Check
@@ -317,10 +319,11 @@ private fun SeekBar(ui: PlayerUi, tv: Boolean) {
 // ======================================================================
 @Composable
 private fun TvButtons(ui: PlayerUi) {
-    val nav = LocalNav.current
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.horizontalScroll(androidx.compose.foundation.rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
         ActionButton(if (ui.isPlaying) "Pausa" else "Reproducir", { ui.toggle() }, icon = if (ui.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, primary = true)
-        ui.next?.let { n -> ActionButton("Siguiente", { nav.play(n) }, icon = Icons.Filled.SkipNext) }
+        ui.next?.let { n -> ActionButton("Siguiente", { ui.goNext(n) }, icon = Icons.Filled.SkipNext) }
+        val qn = com.mauricio.vista.data.Queue.items.collectAsState().value.size
+        ActionButton(if (qn > 0) "A continuación ($qn)" else "A continuación", { ui.panel = "queue" }, icon = Icons.AutoMirrored.Filled.QueueMusic, active = qn > 0)
         if (!ui.video.live && !ui.offline) ActionButton(if (ui.audioOnly) "Solo audio" else Fmt.quality(ui.height), { ui.panel = "quality" }, icon = Icons.Filled.HighQuality)
         ActionButton(speedText(ui.speed), { ui.panel = "speed" }, icon = Icons.Filled.Speed)
         if (ui.info?.let { Sources.subtitleOptions(it).isNotEmpty() } == true) ActionButton(ui.subtitle?.let { "Subtítulos" } ?: "Sin subt.", { ui.panel = "subs" }, icon = Icons.Filled.ClosedCaption, active = ui.subtitle != null)
@@ -340,12 +343,12 @@ private fun TvPanel(ui: PlayerUi) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterEnd) {
         AnimatedVisibility(true, enter = slideInHorizontally { it }, exit = slideOutHorizontally { it }) {
             Column(
-                Modifier.fillMaxHeight().width(if (ui.panel == "related") 420.dp else 330.dp).background(C.Glass).padding(22.dp),
+                Modifier.fillMaxHeight().width(if (ui.panel == "related" || ui.panel == "queue") 460.dp else 330.dp).background(C.Glass).padding(22.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 val title = when (ui.panel) {
                     "quality" -> "Calidad"; "speed" -> "Velocidad"; "subs" -> "Subtítulos"; "chapters" -> "Capítulos"
-                    "related" -> "Más videos"; "sleep" -> "Apagar en…"; else -> "Opciones"
+                    "related" -> "Más videos"; "sleep" -> "Apagar en…"; "queue" -> "A continuación"; else -> "Opciones"
                 }
                 Text(title, color = C.Hi, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 8.dp))
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -384,6 +387,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.panelItems(ui: Player
             if (info != null && Sources.subtitleOptions(info).isNotEmpty()) opt("c", "Subtítulos: " + (ui.subtitle?.let { Sources.subtitleName(it) } ?: "apagados"), false, false) { ui.panel = "subs" }
             if (info?.streamSegments?.isNotEmpty() == true) opt("ch", "Capítulos", false, false) { ui.panel = "chapters" }
             opt("a", if (ui.audioOnly) "Volver a ver el video" else "Solo audio (gasta poco, sigue con la pantalla apagada)", ui.audioOnly, false) { ui.audioOnly = !ui.audioOnly; ui.panel = null }
+            opt("cola", "A continuación (" + com.mauricio.vista.data.Queue.items.value.size + " en la cola)", false, false) { ui.panel = "queue" }
             opt("t", "Temporizador: " + (if (Store.sleepAt > 0) "en " + ((Store.sleepAt - System.currentTimeMillis()) / 60_000 + 1) + " min" else "apagado"), false, false) { ui.panel = "sleep" }
         }
         "quality" -> {
@@ -419,7 +423,10 @@ private fun androidx.compose.foundation.lazy.LazyListScope.panelItems(ui: Player
             }
         }
         "related" -> itemsIndexed(ui.related.take(20), key = { _, v -> "r" + v.id }) { i, v ->
-            VideoRow(v, { onPlay(v) }, if (i == 0 && firstFocus != null) Modifier.focusRequester(firstFocus) else Modifier)
+            VideoRow(v, { onPlay(v) }, if (i == 0 && firstFocus != null) Modifier.focusRequester(firstFocus) else Modifier, onLongClick = { videoMenu.value = v }, trailing = { AddToQueueButton(v) })
+        }
+        "queue" -> item(key = "queue") {
+            QueueList(ui.video, onPlay = { v -> ui.panel = null; ui.goNext(v) }, firstFocus = firstFocus, compactHeader = true)
         }
     }
 }
@@ -458,7 +465,7 @@ private fun EndCard(ui: PlayerUi, tv: Boolean) {
             Box(Modifier.fillMaxWidth().height(if (tv) 190.dp else 150.dp).clip(RoundedCornerShape(12.dp))) { Thumb(n, 0f, Modifier.fillMaxSize()) }
             Text(n.title, color = White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                ActionButton("Ver ya", { nav.play(n) }, Modifier.focusRequester(fr), icon = Icons.Filled.PlayArrow, primary = true)
+                ActionButton("Ver ya", { ui.goNext(n) }, Modifier.focusRequester(fr), icon = Icons.Filled.PlayArrow, primary = true)
                 ActionButton("Cancelar", { ui.next = null })
             }
         }
@@ -494,6 +501,7 @@ fun PhoneWatchPage(ui: PlayerUi, videoSurface: @Composable () -> Unit, onReload:
     val later by Store.later.collectAsState()
     val downloads by Downloads.items.collectAsState()
     var descOpen by remember { mutableStateOf(false) }
+    val qItems by com.mauricio.vista.data.Queue.items.collectAsState()
     var dlOpen by remember { mutableStateOf(false) }
     val v = ui.video
     val subscribed = subs.any { s -> s.url == v.channelUrl || (s.channelId != null && v.channelUrl.contains(s.channelId!!)) }
@@ -598,14 +606,17 @@ fun PhoneWatchPage(ui: PlayerUi, videoSurface: @Composable () -> Unit, onReload:
                 }
             }
             // Siguiente y relacionados
+            if (qItems.isNotEmpty()) item {
+                QueueList(ui.video, onPlay = { v -> ui.goNext(v) }, Modifier.padding(horizontal = 8.dp, vertical = 10.dp))
+            }
             ui.next?.let { n ->
                 item { Text("Siguiente", color = C.Hi, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 16.dp, top = 14.dp, bottom = 4.dp)) }
-                item { VideoRow(n, { nav.play(n) }, Modifier.padding(horizontal = 8.dp), onLongClick = { videoMenu.value = n }) }
+                item { VideoRow(n, { ui.goNext(n) }, Modifier.padding(horizontal = 8.dp), onLongClick = { videoMenu.value = n }) }
             }
             if (ui.related.isNotEmpty()) {
                 item { Text("Más videos", color = C.Hi, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 16.dp, top = 14.dp, bottom = 4.dp)) }
                 items(ui.related.filter { it.id != ui.next?.id }, key = { "rel" + it.id }) { r ->
-                    VideoRow(r, { nav.play(r) }, Modifier.padding(horizontal = 8.dp), onLongClick = { videoMenu.value = r })
+                    VideoRow(r, { nav.play(r) }, Modifier.padding(horizontal = 8.dp), onLongClick = { videoMenu.value = r }, trailing = { AddToQueueButton(r) })
                 }
             }
         }

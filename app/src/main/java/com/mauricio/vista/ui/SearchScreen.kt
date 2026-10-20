@@ -63,6 +63,7 @@ fun SearchScreen(initial: String) {
     val scope = rememberCoroutineScope()
     var text by remember { mutableStateOf(initial) }
     var query by remember { mutableStateOf(initial) }
+    var filter by remember { mutableStateOf("") }
     var suggestions by remember { mutableStateOf<List<String>>(emptyList()) }
     val results = remember { mutableStateListOf<Item>() }
     var more by remember { mutableStateOf<(suspend () -> Paged<Item>)?>(null) }
@@ -80,10 +81,10 @@ fun SearchScreen(initial: String) {
         Store.addSearch(t)
     }
 
-    LaunchedEffect(query) {
+    LaunchedEffect(query, filter) {
         if (query.isBlank()) return@LaunchedEffect
         loading = true; error = null; results.clear(); more = null
-        runCatching { Yt.search(query) }
+        runCatching { Yt.search(query, filter = filter) }
             .onSuccess { p -> results.addAll(p.items.filter { it !is Item.V || !(Store.hideShorts && it.v.short) }); more = p.more }
             .onFailure { error = Yt.friendly(it) }
         loading = false
@@ -160,6 +161,14 @@ fun SearchScreen(initial: String) {
                     Spacer(Modifier.height(8.dp))
                     ActionButton("Borrar búsquedas", { Store.clearSearches() })
                 }
+                if (query.isNotBlank() && (suggestions.isEmpty() || text == query)) {
+                    Spacer(Modifier.height(10.dp))
+                    Wrap {
+                        listOf("" to "Todo", "videos" to "Videos", "channels" to "Canales", "playlists" to "Listas").forEach { (k, label) ->
+                            Pill(label, filter == k, { filter = k })
+                        }
+                    }
+                }
                 if (tv) Spacer(Modifier.height(8.dp))
             }
         }
@@ -167,7 +176,7 @@ fun SearchScreen(initial: String) {
             loading -> item(span = { GridItemSpan(cols) }) { Box(Modifier.fillMaxWidth().height(220.dp), contentAlignment = Alignment.Center) { Spinner() } }
             error != null -> item(span = { GridItemSpan(cols) }) { EmptyHint("No se pudo buscar", error.orEmpty()) }
             query.isNotBlank() && results.isEmpty() -> item(span = { GridItemSpan(cols) }) { EmptyHint("Sin resultados", "Prueba con otras palabras.") }
-            else -> itemsIndexed(results, key = { i, r -> i.toString() + (if (r is Item.V) r.v.id else if (r is Item.C) r.c.url else "") }) { i, r ->
+            else -> itemsIndexed(results, key = { i, r -> i.toString() + (when (r) { is Item.V -> r.v.id; is Item.C -> r.c.url; is Item.P -> r.url }) }) { i, r ->
                 when (r) {
                     is Item.V -> {
                         val queue = results.drop(i + 1).filterIsInstance<Item.V>().map { x -> x.v }.take(20)
@@ -175,6 +184,7 @@ fun SearchScreen(initial: String) {
                         else PhoneVideoCard(r.v, onClick = { nav.play(r.v, queue) }, onLongClick = { videoMenu.value = r.v })
                     }
                     is Item.C -> ChannelResult(r.c) { nav.channel(r.c) }
+                    is Item.P -> PlaylistCard(r, { nav.go(Route.Playlist(r.url, r.name)) })
                 }
             }
         }

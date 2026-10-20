@@ -71,6 +71,8 @@ data class Watched(val video: Video, val posMs: Long, val durMs: Long, val at: L
 sealed interface Item {
     data class V(val v: Video) : Item
     data class C(val c: Chan) : Item
+    /** Lista de reproducción de YouTube. */
+    data class P(val url: String, val name: String, val thumb: String, val count: Long, val owner: String) : Item
 }
 
 /** Página de resultados con la llave para pedir más. */

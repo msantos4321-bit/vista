@@ -30,6 +30,8 @@ class VistaApp : Application(), ImageLoaderFactory {
         Store.init(this)
         Feed.init(this)
         com.mauricio.vista.data.Recs.init(this)
+        com.mauricio.vista.data.Queue.init(this)
+        com.mauricio.vista.data.Playlists.init(this)
         Downloads.init(this)
     }
 

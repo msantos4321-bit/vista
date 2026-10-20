@@ -80,6 +80,7 @@ object Yt {
         when (it) {
             is StreamInfoItem -> Item.V(toVideo(it))
             is ChannelInfoItem -> Item.C(toChan(it))
+            is org.schabi.newpipe.extractor.playlist.PlaylistInfoItem -> Item.P(it.url, it.name.orEmpty(), bestImage(it.thumbnails, 480), it.streamCount, it.uploaderName.orEmpty())
             else -> null
         }
     }
@@ -87,8 +88,10 @@ object Yt {
     // ------------------------------------------------------------------
     // Búsqueda
     // ------------------------------------------------------------------
-    suspend fun search(q: String, onlyVideos: Boolean = false): Paged<Item> = withContext(Net.io()) {
-        val filters = if (onlyVideos) listOf(YoutubeSearchQueryHandlerFactory.VIDEOS) else emptyList()
+    /** [filter]: "" (todo), "videos", "channels" o "playlists". */
+    suspend fun search(q: String, onlyVideos: Boolean = false, filter: String = ""): Paged<Item> = withContext(Net.io()) {
+        val f = if (onlyVideos) YoutubeSearchQueryHandlerFactory.VIDEOS else filter
+        val filters = if (f.isBlank()) emptyList() else listOf(f)
         val qh = yt.searchQHFactory.fromQuery(q, filters, "")
         val info = SearchInfo.getInfo(yt, qh)
         fun next(page: Page?): (suspend () -> Paged<Item>)? = if (!Page.isValid(page)) null else suspend {
@@ -171,6 +174,23 @@ object Yt {
             val info = ChannelInfo.getInfo(yt, url)
             Chan("https://www.youtube.com/channel/${info.id}", info.name.orEmpty(), bestImage(info.avatars, 240), info.subscriberCount)
         }.getOrNull()
+    }
+
+    // ------------------------------------------------------------------
+    // Listas de reproducción de YouTube
+    // ------------------------------------------------------------------
+    class PlaylistPage(val name: String, val owner: String, val count: Long, val thumb: String, val videos: Paged<Video>)
+
+    suspend fun playlist(url: String): PlaylistPage = withContext(Net.io()) {
+        val info = org.schabi.newpipe.extractor.playlist.PlaylistInfo.getInfo(yt, url)
+        fun next(page: Page?): (suspend () -> Paged<Video>)? = if (!Page.isValid(page)) null else suspend {
+            withContext(Net.io()) {
+                val p = org.schabi.newpipe.extractor.playlist.PlaylistInfo.getMoreItems(yt, url, page)
+                Paged(p.items.map { toVideo(it) }, next(p.nextPage))
+            }
+        }
+        PlaylistPage(info.name.orEmpty(), info.uploaderName.orEmpty(), info.streamCount, bestImage(info.thumbnails, 720),
+            Paged(info.relatedItems.map { toVideo(it) }, next(info.nextPage)))
     }
 
     // ------------------------------------------------------------------

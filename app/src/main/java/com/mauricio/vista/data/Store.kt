@@ -238,6 +238,7 @@ object Store {
             .put("topics", JSONArray(topics)).put("hidden", JSONArray(hiddenVideos.toList())).put("blocked", JSONArray(blockedChannels.toList()))
             .put("qWifi", qualityWifi).put("qData", qualityData).put("speed", speed.toDouble()).put("sb", sponsorBlock)
             .put("sbCats", JSONArray(sbCategories.toList())).put("subs_lang", subtitles).put("hideShorts", hideShorts).put("autoplay", autoplay)
+            .put("listas", Playlists.toJson())
     }
 
     /** Junta la cuenta que llegó con lo que ya había aquí (no borra nada). Devuelve un resumen. */
@@ -271,6 +272,7 @@ object Store {
         if (o.has("hideShorts")) e.putBoolean("hideShorts", o.optBoolean("hideShorts", true))
         if (o.has("autoplay")) e.putBoolean("autoplay", o.optBoolean("autoplay", true))
         e.apply(); tick()
+        o.optJSONArray("listas")?.let { runCatching { Playlists.merge(it) } }
         return "$added canales nuevos, ${t.size} temas e historial de $histN videos"
     }
 

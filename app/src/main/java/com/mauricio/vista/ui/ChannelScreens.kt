@@ -25,7 +25,10 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.DoNotDisturbOn
 import androidx.compose.material.icons.filled.Check
@@ -96,6 +99,15 @@ fun VideoMenu(v: Video, onClose: () -> Unit) {
             } else {
                 MenuRow(Icons.Filled.PlayArrow, "Ver ahora", Modifier.focusRequester(fr)) { onClose(); nav.play(v) }
                 MenuRow(Icons.Filled.Headphones, "Escuchar (solo audio)") { onClose(); nav.play(v, audioOnly = true) }
+                val inQueue = com.mauricio.vista.data.Queue.has(v.id)
+                MenuRow(Icons.Filled.SkipNext, "Reproducir a continuación") {
+                    com.mauricio.vista.data.Queue.playNext(v); Toast.show("Será lo siguiente que se vea"); onClose()
+                }
+                MenuRow(if (inQueue) Icons.Filled.Check else Icons.AutoMirrored.Filled.PlaylistAdd, if (inQueue) "Quitar de la cola" else "Agregar a la cola") {
+                    if (inQueue) com.mauricio.vista.data.Queue.remove(v.id) else com.mauricio.vista.data.Queue.add(v)
+                    Toast.show(if (inQueue) "Quitado de la cola" else "Agregado a la cola (${com.mauricio.vista.data.Queue.items.value.size})"); onClose()
+                }
+                MenuRow(Icons.AutoMirrored.Filled.QueueMusic, "Guardar en una lista…") { onClose(); saveToListVideo.value = listOf(v) }
                 val isLater = later.any { it.id == v.id }
                 MenuRow(if (isLater) Icons.Filled.Check else Icons.Filled.WatchLater, if (isLater) "Quitar de «Ver después»" else "Guardar en «Ver después»") {
                     val now = Store.toggleLater(v); Toast.show(if (now) "Guardado en «Ver después»" else "Quitado de «Ver después»"); onClose()
@@ -289,6 +301,8 @@ fun ChannelScreen(url: String, name: String) {
                                 },
                                 Modifier.focusRequester(subFr), icon = if (subscribed) Icons.Filled.Check else Icons.Filled.Subscriptions, primary = !subscribed,
                             )
+                            Spacer(Modifier.width(8.dp))
+                            ActionButton(if (tv) "Reproducir todo" else "", { nav.playAll(videos.toList()) }, icon = Icons.Filled.PlayArrow)
                             if (tv) Spacer(Modifier.width(100.dp))
                         }
                     }

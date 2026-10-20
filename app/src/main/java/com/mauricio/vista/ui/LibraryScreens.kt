@@ -26,6 +26,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Cast
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Headphones
@@ -72,11 +74,35 @@ fun LibraryScreen() {
     val tv = DeviceUi.isTv
     val first = remember { FocusRequester() }
     val mem = remember { nav.memory("library") }
+    val lists by com.mauricio.vista.data.Playlists.lists.collectAsState()
+    val queue by com.mauricio.vista.data.Queue.items.collectAsState()
+    var newList by remember { mutableStateOf(false) }
+    if (newList) NameDialog("Nueva lista", "", { com.mauricio.vista.data.Playlists.create(it); newList = false; Toast.show("Lista creada") }) { newList = false }
+
+    val listsRow: @Composable () -> Unit = {
+        Column {
+            Text("Mis listas", color = C.Hi, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = if (tv) 28.dp else 16.dp, bottom = 10.dp))
+            LazyRow(contentPadding = PaddingValues(horizontal = if (tv) 28.dp else 16.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                if (queue.isNotEmpty()) item(key = "cola") {
+                    ListTile("A continuación", "${queue.size} en la cola", queue.first().thumbHq, { nav.playAll(queue) }, width = if (tv) 220.dp else 180.dp)
+                }
+                items(lists, key = { it.id }) { pl ->
+                    ListTile(pl.name, "${pl.videos.size} videos", pl.videos.firstOrNull()?.thumbHq, { nav.go(Route.MyList(pl.id)) }, width = if (tv) 220.dp else 180.dp)
+                }
+                item(key = "nueva") {
+                    Box(Modifier.width(if (tv) 220.dp else 180.dp).padding(top = 30.dp), contentAlignment = Alignment.Center) {
+                        ActionButton("Nueva lista", { newList = true }, icon = Icons.Filled.Add)
+                    }
+                }
+            }
+        }
+    }
 
     if (tv) {
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = 26.dp, bottom = 60.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
             item { Text("Biblioteca", color = C.Hi, fontSize = 26.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 28.dp)) }
             if (history.isEmpty() && later.isEmpty()) item { EmptyHint("Todavía no has visto nada", "Aquí aparecerá lo que veas y lo que guardes para después.") }
+            item { listsRow() }
             if (later.isNotEmpty()) item { TvRow("Ver después", later, emptyMap(), mem, first) }
             if (history.isNotEmpty()) item { TvRow("Historial", history.map { it.video }, history.associate { it.video.id to it.progress }, mem, if (later.isEmpty()) first else null) }
             if (history.isNotEmpty()) item { Box(Modifier.padding(start = 28.dp)) { ActionButton("Borrar historial", { Store.clearHistory(); Toast.show("Historial borrado") }, icon = Icons.Filled.Delete) } }
@@ -97,10 +123,12 @@ fun LibraryScreen() {
                 LinkRow(Icons.Filled.Settings, "Ajustes", "Calidad, subtítulos, importar…") { nav.go(Route.Settings) }
             }
         }
+        item { Spacer(Modifier.height(18.dp)); listsRow() }
         item {
             Row(Modifier.padding(start = 12.dp, top = 18.dp, bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Pill("Historial", tab == 0, { tab = 0 }, icon = Icons.Filled.History)
                 Pill("Ver después", tab == 1, { tab = 1 }, icon = Icons.Filled.WatchLater)
+                if (tab == 1 && later.isNotEmpty()) Pill("Reproducir todo", false, { nav.playAll(later) }, icon = Icons.Filled.PlayArrow)
             }
         }
         if (list.isEmpty()) item { EmptyHint(if (tab == 0) "Sin historial" else "Nada guardado", if (tab == 0) "Lo que veas aparecerá aquí." else "Mantén presionado un video y elige «Guardar en Ver después».") }

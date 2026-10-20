@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -105,6 +106,10 @@ class PlayerUi(val player: ExoPlayer) {
     var next by mutableStateOf<Video?>(null)
     var related by mutableStateOf<List<Video>>(emptyList())
 
+    /** Pasa al siguiente video (lo conecta la pantalla con la navegación). */
+    var onNext: (Video) -> Unit = {}
+    fun goNext(n: Video) { com.mauricio.vista.data.Queue.advance(video, n); onNext(n) }
+
     fun showControls() { controls = true; controlsTick++ }
     fun flash(t: String) { hint = t; hintTick++ }
     fun toggle() { if (player.isPlaying) player.pause() else { if (ended) { player.seekTo(0); ended = false }; player.play() } }
@@ -133,6 +138,7 @@ fun PlayerScreen(start: Video, queue: List<Video>, startAudioOnly: Boolean) {
             .build()
     }
     val ui = remember { PlayerUi(player).also { it.video = start; it.audioOnly = startAudioOnly } }
+    ui.onNext = { n -> nav.continueWith(n, ui.audioOnly) }
     var retry by remember { mutableIntStateOf(0) }
     val rootFr = remember { FocusRequester() }
 
@@ -202,9 +208,10 @@ fun PlayerScreen(start: Video, queue: List<Video>, startAudioOnly: Boolean) {
         ui.segments = runCatching { SponsorBlock.segments(start.id) }.getOrDefault(emptyList())
     }
 
-    // Siguiente video: el de la fila de donde vino, o el primero recomendado que no hayas visto
-    LaunchedEffect(ui.related) {
-        ui.next = queue.firstOrNull() ?: ui.related.firstOrNull { r -> Store.watched(r.id)?.finished != true }
+    // Siguiente video: la cola «A continuación», luego la fila de donde vino, luego lo recomendado que no hayas visto
+    val queueItems by com.mauricio.vista.data.Queue.items.collectAsState()
+    LaunchedEffect(ui.related, queueItems) {
+        ui.next = com.mauricio.vista.data.Queue.peekNext(ui.video, ui.related)
     }
 
     // 2) Eventos del reproductor
@@ -216,6 +223,9 @@ fun PlayerScreen(start: Video, queue: List<Video>, startAudioOnly: Boolean) {
             override fun onIsPlayingChanged(isPlaying: Boolean) { ui.isPlaying = isPlaying; PlayerState.playing = isPlaying }
             override fun onPlaybackStateChanged(state: Int) {
                 ui.buffering = state == Player.STATE_BUFFERING
+                if (state == Player.STATE_ENDED && com.mauricio.vista.data.Queue.repeat.value == "one") {
+                    player.seekTo(0); player.play(); return
+                }
                 if (state == Player.STATE_ENDED) {
                     ui.ended = true
                     ui.showControls()
@@ -318,9 +328,11 @@ fun PlayerScreen(start: Video, queue: List<Video>, startAudioOnly: Boolean) {
 
     // Al terminar: siguiente automático
     LaunchedEffect(ui.ended) {
-        if (ui.ended && Store.autoplay && ui.next != null) {
-            delay(8000)
-            if (ui.ended) ui.next?.let { n -> nav.play(n, queue.drop(1)) }
+        // Con una cola armada a mano se sigue siempre; si no, según «Siguiente video automático»
+        val manual = com.mauricio.vista.data.Queue.manual
+        if (ui.ended && (Store.autoplay || manual) && ui.next != null) {
+            delay(if (manual) 5000 else 8000)
+            if (ui.ended) ui.next?.let { n -> ui.goNext(n) }
         }
     }
 
@@ -408,6 +420,7 @@ private fun tvKeys(ui: PlayerUi, key: Key, type: KeyEventType, root: FocusReques
             Key.MediaPlayPause, Key.MediaPlay, Key.MediaPause -> { ui.toggle(); ui.showControls(); true }
             Key.MediaFastForward -> { ui.seekBy(30_000); true }
             Key.MediaRewind -> { ui.seekBy(-30_000); true }
+            Key.MediaNext -> { ui.next?.let { ui.goNext(it) }; true }
             else -> false
         }
     }
