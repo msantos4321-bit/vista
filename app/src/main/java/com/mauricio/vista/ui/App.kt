@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -145,12 +146,16 @@ fun App() {
     LaunchedEffect(Unit) { while (true) { kotlinx.coroutines.delay(60_000); C.apply(com.mauricio.vista.data.Store.theme) } }
     LaunchedEffect(C.dark) { DeviceUi.styleBars(C.dark) }
 
+    // Si la app se cerró sola hace poco, se abre en modo seguro: primero ofrece actualizar
+    var recovering by remember { mutableStateOf(com.mauricio.vista.data.Store.crashedRecently()) }
+
     val top = stack.last()
     BackHandler(enabled = stack.size > 1 || top != Route.Home) { nav.back() }
 
     CompositionLocalProvider(LocalNav provides nav) {
         Box(Modifier.fillMaxSize().background(C.Bg)) {
             when {
+                recovering -> RecoveryScreen { recovering = false; com.mauricio.vista.data.Store.clearCrash() }
                 top is Route.Player -> key(top.video.id) { PlayerScreen(top.video, top.queue, top.audioOnly) }
                 DeviceUi.isTv -> TvShell(top)
                 else -> PhoneShell(top)
@@ -308,4 +313,29 @@ fun PhoneTopBar(title: String, action: (@Composable () -> Unit)? = null) {
         Text(title, color = C.Hi, fontSize = 28.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
         action?.invoke()
     }
+}
+
+
+/** Pantalla segura cuando la app se cerró sola: no carga nada pesado, ofrece actualizar y muestra el motivo. */
+@Composable
+private fun RecoveryScreen(onContinue: () -> Unit) {
+    val fr = remember { FocusRequester() }
+    var detail by remember { mutableStateOf(false) }
+    Column(
+        Modifier.fillMaxSize().padding(40.dp).verticalScroll(androidx.compose.foundation.rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Text("Vista se cerró la vez pasada", color = C.Hi, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+        Text("Lo más seguro es que ya esté el arreglo. Busca la actualización; si no hay, puedes abrir normal o ver el detalle para mandárselo a quien te ayuda.", color = C.Mid, fontSize = 15.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            ActionButton("Buscar actualización", {
+                updateDialogOpen.value = true
+                uiScope.launch { com.mauricio.vista.data.Updater.check() }
+            }, Modifier.focusRequester(fr), primary = true)
+            ActionButton("Abrir normal", onContinue)
+            ActionButton(if (detail) "Ocultar detalle" else "Ver detalle", { detail = !detail })
+        }
+        if (detail) Text(com.mauricio.vista.data.Store.lastError.take(2500), color = C.Low, fontSize = 11.sp)
+    }
+    LaunchedEffect(Unit) { kotlinx.coroutines.delay(100); runCatching { fr.requestFocus() } }
 }

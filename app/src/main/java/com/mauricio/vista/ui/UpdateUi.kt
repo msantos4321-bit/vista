@@ -43,7 +43,8 @@ val updateDialogOpen = mutableStateOf(false)
 @Composable
 fun AutoUpdateCheck() {
     LaunchedEffect(Unit) {
-        delay(1500)
+        // Si la app se cerró sola la vez pasada, se revisa de inmediato (puede que ya esté el arreglo)
+        delay(if (com.mauricio.vista.data.Store.crashedRecently()) 0 else 1500)
         val r = Updater.check()
         if (r != null && r.versionCode != Updater.dismissedCode) updateDialogOpen.value = true
     }

@@ -75,7 +75,12 @@ object HomeData {
         kotlinx.coroutines.withContext(com.mauricio.vista.data.Net.background) { coroutineScope {
             val feed = async { runCatching { Feed.refresh(force) } }
             kiosks.map { (id, _) ->
-                async { runCatching { Yt.kiosk(id) }.getOrNull()?.let { rows[id] = it } }
+                async {
+                    runCatching { Yt.kiosk(id) }.getOrNull()?.let { list ->
+                        // El estado de la pantalla solo se toca desde el hilo principal (si no, la app se cierra en teles lentas)
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { rows[id] = list }
+                    }
+                }
             }.awaitAll()
             feed.await()
         } }

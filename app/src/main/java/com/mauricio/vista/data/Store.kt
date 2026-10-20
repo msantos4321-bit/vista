@@ -218,6 +218,10 @@ object Store {
         get() = sp.getString("lastError", "") ?: ""
         set(v) { sp.edit().putString("lastError", v.take(6000)).commit() }
 
+    /** ¿La app se cerró sola hace poco? (al abrir se ofrece actualizar antes de cargar todo) */
+    fun crashedRecently(): Boolean = System.currentTimeMillis() - sp.getLong("crashAt", 0) < 10 * 60_000
+    fun clearCrash() { sp.edit().remove("crashAt").apply() }
+
     /** "auto", "dark" o "light". */
     var theme: String
         get() = sp.getString("theme", "") ?: ""

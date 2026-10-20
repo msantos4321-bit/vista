@@ -22,7 +22,7 @@ class VistaApp : Application(), ImageLoaderFactory {
                     "lastError",
                     ("Cierre inesperado · v${BuildConfig.VERSION_NAME} · ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL} · Android ${android.os.Build.VERSION.RELEASE} · hilo ${t.name}\n" +
                         android.util.Log.getStackTraceString(e)).take(6000),
-                ).commit()
+                ).putLong("crashAt", System.currentTimeMillis()).commit()
             }
             prev?.uncaughtException(t, e)
         }

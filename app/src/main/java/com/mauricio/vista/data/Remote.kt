@@ -105,6 +105,7 @@ object Remote {
         val (code, type, out) = when {
             method == "GET" && (path == "/" || path == "/index.html") -> Triple(200, "text/html; charset=utf-8", page().toByteArray())
             method == "GET" && path == "/estado" -> Triple(200, "application/json", JSONObject().put("ok", true).put("app", "Vista").put("modelo", android.os.Build.MODEL).put("nombre", deviceName()).put("tv", isTv).toString().toByteArray())
+            method == "GET" && path == "/error" -> Triple(200, "text/plain; charset=utf-8", ("Vista en " + deviceName() + "\n\n" + Store.lastError.ifBlank { "Sin errores guardados." }).toByteArray())
             method == "POST" && path == "/cuenta" -> {
                 val r = runCatching { Store.importAccount(JSONObject(String(body, Charsets.UTF_8))) }
                 r.getOrNull()?.let { _cmds.tryEmit(Cmd.Account(it)) }
@@ -276,6 +277,7 @@ button,.btn{display:inline-block;margin-top:10px;width:100%;border:0;border-radi
 <div class="card"><h2>Pasar mis suscripciones</h2><p>Sube el archivo de Google Takeout (el .zip completo o «subscriptions.csv»), o pega ligas de canales, una por línea.</p>
 <input type="file" id="f"><button onclick="up()">Subir archivo</button>
 <textarea id="t" placeholder="https://www.youtube.com/@canal"></textarea><button onclick="send('/importar',t.value,'m3')">Agregar canales</button><div class="msg" id="m3"></div></div>
+<p class="sub" style="text-align:center"><a href="/error" style="color:var(--low)">Ver el último error de este aparato</a></p>
 <script>
 async function send(p,b,m){const e=document.getElementById(m);e.textContent='Enviando…';try{const r=await fetch(p,{method:'POST',body:b});const j=await r.json();e.textContent=j.ok?(j.nuevos!==undefined?('Listo: '+j.nuevos+' canales nuevos de '+j.total+'.'):'¡Listo!'):(j.error||'No se pudo');}catch(x){e.textContent='No se pudo conectar. Revisa que Vista esté abierta en el otro aparato.';}}
 async function up(){const fl=f.files[0];if(!fl){m3.textContent='Elige primero el archivo.';return;}m3.textContent='Subiendo y revisando canales… (puede tardar un minuto)';const b=await fl.arrayBuffer();send('/importar',b,'m3');}
