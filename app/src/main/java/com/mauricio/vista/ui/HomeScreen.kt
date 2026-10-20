@@ -72,15 +72,13 @@ object HomeData {
     suspend fun load(force: Boolean = false) {
         if (!force && System.currentTimeMillis() - loadedAt < 20 * 60_000 && rows.isNotEmpty()) return
         loadedAt = System.currentTimeMillis()
-        coroutineScope {
+        kotlinx.coroutines.withContext(com.mauricio.vista.data.Net.background) { coroutineScope {
             val feed = async { runCatching { Feed.refresh(force) } }
-            val recs = async { runCatching { Recs.refresh(force) } }
             kiosks.map { (id, _) ->
                 async { runCatching { Yt.kiosk(id) }.getOrNull()?.let { rows[id] = it } }
             }.awaitAll()
             feed.await()
-            recs.await()
-        }
+        } }
     }
 }
 
@@ -90,7 +88,8 @@ private fun List<Video>.clean() = (if (Store.hideShorts) filterNot { it.short } 
 fun HomeScreen() {
     LaunchedEffect(Unit) {
         HomeData.load()
-        // Lo que viste desde la última vez cambia las recomendaciones
+        // Lo que viste desde la última vez cambia las recomendaciones (en la tele, con calma para no trabarla)
+        kotlinx.coroutines.delay(if (DeviceUi.realTv) 12_000 else 2_000)
         runCatching { Recs.refresh() }
     }
     val tick by Store.settingsTick.collectAsState()
@@ -138,12 +137,22 @@ private fun TvHome() {
     val rows = buildRows()
     val mem = remember { nav.memory("home") }
     var hero by remember { mutableStateOf<Video?>(null) }
+    var focusedV by remember { mutableStateOf<Video?>(null) }
+    // La portada cambia cuando el control se detiene un momento (si no, cada movimiento cargaba una imagen grande)
+    LaunchedEffect(focusedV) {
+        val v = focusedV ?: return@LaunchedEffect
+        kotlinx.coroutines.delay(320)
+        hero = v
+        // Si se queda ahí, se va preparando el video para que arranque al instante
+        kotlinx.coroutines.delay(900)
+        Yt.prefetch(v.url)
+    }
     val first = remember { FocusRequester() }
     val shown = hero ?: rows.firstOrNull()?.videos?.firstOrNull()
 
     Box(Modifier.fillMaxSize()) {
         // Fondo: la imagen del video enfocado, difuminada hacia los lados
-        Crossfade(shown?.id, animationSpec = tween(450), label = "hero") { id ->
+        Crossfade(shown?.id, animationSpec = tween(250), label = "hero") { id ->
             val v = rows.asSequence().flatMap { it.videos }.firstOrNull { it.id == id } ?: shown
             if (v != null) Box(Modifier.fillMaxWidth().height(330.dp)) {
                 Img(v.thumbMax, Modifier.fillMaxSize(), fallback = v.thumbHq)
@@ -179,14 +188,14 @@ private fun TvHome() {
                             Text(r.title, color = C.Hi, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 28.dp, bottom = 10.dp))
                             LazyRow(contentPadding = PaddingValues(horizontal = 28.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                                 itemsIndexed(r.chans, key = { _, c -> "c" + c.chan.url }) { _, c ->
-                                    SuggestedChannelCard(c, 220.dp, Modifier.rememberFocus(mem, "${r.key}:${c.chan.url}"), onFocused = { hero = c.sample })
+                                    SuggestedChannelCard(c, 220.dp, Modifier.rememberFocus(mem, "${r.key}:${c.chan.url}"), onFocused = { focusedV = c.sample })
                                 }
                                 itemsIndexed(r.videos, key = { _, v -> v.id }) { i, v ->
                                     VideoCard(
                                         v, onClick = { nav.play(v, r.videos.drop(i + 1)) },
                                         modifier = Modifier.rememberFocus(mem, "${r.key}:${v.id}").then(if (ri == 0 && i == 0) Modifier.focusRequester(first) else Modifier),
                                         width = 220.dp, progress = r.progress[v.id] ?: 0f,
-                                        onFocused = { hero = v },
+                                        onFocused = { focusedV = v },
                                         onLongClick = { videoMenu.value = v },
                                     )
                                 }

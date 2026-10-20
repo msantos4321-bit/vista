@@ -49,6 +49,11 @@ object Recs {
 
     fun queryFor(topic: String) = topicQueries[topic] ?: topic
 
+    /** Lo pone el reproductor: mientras se ve un video no se hace trabajo de fondo pesado. */
+    @Volatile var playing = false
+    /** Teles y aparatos lentos: menos trabajo de fondo. */
+    @Volatile var lightMode = false
+
     private val _forYou = MutableStateFlow<List<Video>>(emptyList())
     val forYou: StateFlow<List<Video>> get() = _forYou
 
@@ -123,15 +128,12 @@ object Recs {
         val missing = hist.take(15).map { it.video }.filter { v ->
             val r = synchronized(related) { related[v.id] }
             r == null || System.currentTimeMillis() - r.first > 3 * 86_400_000L
-        }.take(8)
-        if (missing.isNotEmpty()) {
-            val sem = Semaphore(3)
-            coroutineScope {
-                missing.map { v ->
-                    async(Dispatchers.IO) {
-                        sem.withPermit { runCatching { Yt.related(Yt.stream(v.url)) }.getOrNull()?.let { remember(v.id, it) } }
-                    }
-                }.awaitAll()
+        }.take(if (lightMode) 2 else 4)
+        // De uno en uno, en fondo, y nunca mientras se está viendo un video
+        withContext(Net.background) {
+            for (v in missing) {
+                if (playing) break
+                runCatching { Yt.related(Yt.stream(v.url)) }.getOrNull()?.let { remember(v.id, it) }
             }
         }
         compute()
@@ -209,10 +211,10 @@ object Recs {
     private fun <K> HashMap<K, Double>.add(k: K, v: Double) { this[k] = (this[k] ?: 0.0) + v }
 
     /** Una fila por cada tema elegido (se renueva cada 3 horas). */
-    suspend fun refreshTopics(force: Boolean = false) { withContext(Dispatchers.IO) {
+    suspend fun refreshTopics(force: Boolean = false) { withContext(Net.background) {
         val topics = Store.topics
         if (topics.isEmpty()) { _topicRows.value = emptyMap(); return@withContext }
-        val sem = Semaphore(3)
+        val sem = Semaphore(if (lightMode) 1 else 3)
         coroutineScope {
             topics.map { t ->
                 async {

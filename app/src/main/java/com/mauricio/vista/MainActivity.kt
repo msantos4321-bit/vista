@@ -29,6 +29,7 @@ class MainActivity : ComponentActivity() {
         com.mauricio.vista.ui.C.apply(Store.theme)
         // Todos los aparatos escuchan en la red de la casa: así se puede pasar la cuenta a una tele, tableta u otro celular
         Remote.isTv = DeviceUi.realTv
+        com.mauricio.vista.data.Recs.lightMode = DeviceUi.realTv
         Remote.startServer()
         if (savedInstanceState == null) readIntent(intent)
         setContent {

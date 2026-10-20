@@ -213,6 +213,11 @@ object Store {
     /** La tele para «Ver en la tele» (o el primer aparato conectado). */
     val tvAddress: String get() = devices.let { l -> (l.firstOrNull { it.tv } ?: l.firstOrNull())?.host.orEmpty() }
 
+    /** Detalle del último error (para mandármelo y saber qué pasó). */
+    var lastError: String
+        get() = sp.getString("lastError", "") ?: ""
+        set(v) { sp.edit().putString("lastError", v.take(6000)).commit() }
+
     /** "auto", "dark" o "light". */
     var theme: String
         get() = sp.getString("theme", "") ?: ""

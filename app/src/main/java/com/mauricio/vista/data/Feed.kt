@@ -62,10 +62,10 @@ object Feed {
         val sem = Semaphore(8)
         val all = coroutineScope {
             subs.map { ch ->
-                async(Dispatchers.IO) {
+                async(Net.background) {
                     sem.withPermit {
                         val r = runCatching { channelFeed(ch) }.getOrDefault(emptyList())
-                        synchronized(this@Feed) { done++; _state.value = State.Loading(done, subs.size) }
+                        synchronized(this@Feed) { done++; if (done % 6 == 0 || done == subs.size) _state.value = State.Loading(done, subs.size) }
                         r
                     }
                 }

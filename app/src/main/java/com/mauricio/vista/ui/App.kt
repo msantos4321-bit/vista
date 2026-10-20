@@ -56,6 +56,7 @@ import com.mauricio.vista.data.Chan
 import com.mauricio.vista.data.Remote
 import com.mauricio.vista.data.Video
 import com.mauricio.vista.data.Yt
+import kotlinx.coroutines.launch
 
 sealed interface Route {
     data object Home : Route
@@ -121,8 +122,10 @@ fun App() {
                 is Remote.Cmd.Imported -> Toast.show(if (c.added > 0) "Se agregaron ${c.added} canales a tus suscripciones" else "Esos canales ya estaban en tus suscripciones")
                 is Remote.Cmd.Account -> {
                     Toast.show("Cuenta recibida: ${c.summary}")
-                    runCatching { com.mauricio.vista.data.Feed.refresh(force = true) }
-                    runCatching { com.mauricio.vista.data.Recs.refresh(force = true) }
+                    uiScope.launch {
+                        runCatching { com.mauricio.vista.data.Feed.refresh(force = true) }
+                        runCatching { com.mauricio.vista.data.Recs.refresh(force = true) }
+                    }
                 }
             }
         }

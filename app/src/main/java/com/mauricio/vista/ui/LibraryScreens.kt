@@ -209,6 +209,7 @@ fun SettingsScreen() {
     var choice by remember { mutableStateOf<Choice?>(null) }
     var sbOpen by remember { mutableStateOf(false) }
     var importing by remember { mutableStateOf(false) }
+    var errorOpen by remember { mutableStateOf(false) }
     val first = remember { FocusRequester() }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -297,6 +298,12 @@ fun SettingsScreen() {
 
         Group("Otros")
         SettingRow("Borrar historial", "") { Store.clearHistory(); Toast.show("Historial borrado") }
+        if (Store.lastError.isNotBlank()) SettingRow("Último error (mandarlo para revisarlo)", if (tv) "Ver" else "Compartir") {
+            if (tv) errorOpen = true else runCatching {
+                ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
+                    .putExtra(Intent.EXTRA_SUBJECT, "Error de Vista").putExtra(Intent.EXTRA_TEXT, "Vista ${BuildConfig.VERSION_NAME}\n" + Store.lastError), "Mandar el error"))
+            }
+        }
         SettingRow("Buscar actualizaciones", "Versión ${BuildConfig.VERSION_NAME}") { updateDialogOpen.value = true; uiScope.launch { com.mauricio.vista.data.Updater.check() } }
         Text(
             "Vista no usa cuenta de Google: no hay anuncios ni rastreo. Tus suscripciones e historial se guardan solo en este aparato. " +
@@ -310,6 +317,13 @@ fun SettingsScreen() {
     choice?.let { c -> ChoiceDialog(c) { choice = null } }
     if (topicPickerOpen.value) TopicPicker { topicPickerOpen.value = false }
     if (sbOpen) SponsorDialog { sbOpen = false }
+    if (errorOpen) Dialog(onDismissRequest = { errorOpen = false }) {
+        Column(Modifier.width(620.dp).background(C.Panel, RoundedCornerShape(18.dp)).verticalScroll(rememberScrollState()).padding(20.dp)) {
+            Text("Último error", color = C.Hi, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Text(Store.lastError.take(1500), color = C.Mid, fontSize = 11.sp, modifier = Modifier.padding(vertical = 10.dp))
+            ActionButton("Cerrar", { errorOpen = false }, primary = true)
+        }
+    }
 }
 
 private fun themeLabel(t: String) = when (t) { "dark" -> "Noche suave"; "light" -> "Claro"; "auto" -> "Automático"; else -> "Recomendado" }

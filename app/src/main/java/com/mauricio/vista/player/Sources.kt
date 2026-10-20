@@ -69,8 +69,8 @@ object Sources {
             .distinct().sortedDescending()
 
     /** El mejor video que no pase de [maxH]; a igual altura prefiere MP4 (lo aguantan todas las teles). */
-    fun pickVideo(info: StreamInfo, maxH: Int): VideoStream? {
-        val list = info.videoOnlyStreams.filter { usable(it) }
+    fun pickVideo(info: StreamInfo, maxH: Int, h264Only: Boolean = false): VideoStream? {
+        val list = info.videoOnlyStreams.filter { usable(it) && (!h264Only || (it.format == MediaFormat.MPEG_4 && it.codec.orEmpty().startsWith("avc"))) }
         if (list.isEmpty()) return null
         val fit = list.filter { it.height <= maxH }.ifEmpty { listOf(list.minBy { it.height }) }
         val h = fit.maxOf { it.height }
@@ -132,7 +132,7 @@ object Sources {
      * @param maxH altura máxima de video (0 = solo audio)
      * @param sub subtítulo a mostrar (o null)
      */
-    fun build(info: StreamInfo, maxH: Int, sub: SubtitlesStream?): Built {
+    fun build(info: StreamInfo, maxH: Int, sub: SubtitlesStream?, h264Only: Boolean = false): Built {
         if (isLive(info)) {
             val hls = info.hlsUrl
             val src = if (!hls.isNullOrBlank()) HlsMediaSource.Factory(dsf).createMediaSource(MediaItem.fromUri(hls))
@@ -142,7 +142,7 @@ object Sources {
         val parts = ArrayList<MediaSource>()
         var height = 0
         val audio = pickAudio(info)
-        val video = if (maxH > 0) pickVideo(info, maxH) else null
+        val video = if (maxH > 0) pickVideo(info, maxH, h264Only) else null
         if (video != null) {
             parts += runCatching { manualDash(video.content, video.itagItem!!, info.duration) }.getOrElse { progressive(video.content) }
             height = video.height

@@ -57,6 +57,7 @@ import com.mauricio.vista.data.Video
 import com.mauricio.vista.data.Yt
 import com.mauricio.vista.player.Sources
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.schabi.newpipe.extractor.stream.StreamInfo
 import org.schabi.newpipe.extractor.stream.SubtitlesStream
 
@@ -78,6 +79,9 @@ class PlayerUi(val player: ExoPlayer) {
     var audioOnly by mutableStateOf(false)
     /** 0 = automática. */
     var chosenQuality by mutableIntStateOf(0)
+    /** Tras un error del decodificador: solo H.264 (lo aguanta cualquier aparato). */
+    var safeMode by mutableStateOf(false)
+    var autoFixes = 0
     var height by mutableIntStateOf(0)
     var subtitle by mutableStateOf<SubtitlesStream?>(null)
     var speed by mutableFloatStateOf(Store.speed)
@@ -134,7 +138,7 @@ fun PlayerScreen(start: Video, queue: List<Video>, startAudioOnly: Boolean) {
         val info = ui.info ?: return
         try {
             val maxH = if (ui.audioOnly) 0 else if (ui.chosenQuality > 0) ui.chosenQuality else Sources.autoHeight(ctx)
-            val built = Sources.build(info, maxH, ui.subtitle)
+            val built = Sources.build(info, maxH, ui.subtitle, ui.safeMode)
             ui.height = built.height
             player.setMediaSource(built.source, posMs.coerceAtLeast(0))
             player.prepare()
@@ -192,6 +196,7 @@ fun PlayerScreen(start: Video, queue: List<Video>, startAudioOnly: Boolean) {
     // 2) Eventos del reproductor
     DisposableEffect(Unit) {
         PlayerState.active = true
+        com.mauricio.vista.data.Recs.playing = true
         player.setPlaybackSpeed(ui.speed)
         val l = object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) { ui.isPlaying = isPlaying; PlayerState.playing = isPlaying }
@@ -205,11 +210,39 @@ fun PlayerScreen(start: Video, queue: List<Video>, startAudioOnly: Boolean) {
                 if (state == Player.STATE_READY) ui.ended = false
             }
             override fun onPlayerError(error: PlaybackException) {
-                // Las ligas de YouTube caducan: la primera vez se piden de nuevo en silencio
                 val http = generateSequence(error as Throwable?) { it.cause }.filterIsInstance<androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException>().firstOrNull()
-                if (http != null && http.responseCode == 403 && retry < 2 && !ui.offline) {
-                    ui.flash("Reconectando…"); retry++
-                } else ui.error = "No se pudo reproducir (" + error.errorCodeName.removePrefix("ERROR_CODE_").lowercase().replace('_', ' ') + (http?.let { " · ${it.responseCode}" } ?: "") + ")."
+                val pos = player.currentPosition
+                val decoder = error.errorCode in setOf(
+                    PlaybackException.ERROR_CODE_DECODER_INIT_FAILED, PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED,
+                    PlaybackException.ERROR_CODE_DECODING_FAILED, PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+                    PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
+                )
+                val network = error.errorCode in setOf(
+                    PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED, PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+                    PlaybackException.ERROR_CODE_TIMEOUT, PlaybackException.ERROR_CODE_IO_UNSPECIFIED,
+                )
+                com.mauricio.vista.data.Store.lastError = "Video ${ui.video.id} · ${error.errorCodeName} · ${http?.responseCode ?: ""} · calidad ${ui.height} · " +
+                    android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL + " Android " + android.os.Build.VERSION.RELEASE + "\n" + android.util.Log.getStackTraceString(error).take(3000)
+                when {
+                    // Las ligas de YouTube caducan: se piden de nuevo en silencio
+                    http != null && (http.responseCode == 403 || http.responseCode == 410) && retry < 2 && !ui.offline -> { ui.flash("Reconectando…"); retry++ }
+                    // El aparato no pudo con ese formato: se cambia a uno más sencillo sin preguntar
+                    decoder && !ui.offline && ui.autoFixes < 3 -> {
+                        ui.autoFixes++
+                        ui.flash("Ajustando el video para este aparato…")
+                        ui.safeMode = true
+                        val lower = (ui.info?.let { Sources.heights(it) }.orEmpty().filter { it < ui.height.coerceAtLeast(1) }.firstOrNull { it <= 720 }) ?: 360
+                        if (ui.chosenQuality == lower) load(pos) else ui.chosenQuality = lower
+                    }
+                    // Se fue el internet un momento: se reintenta solo
+                    network && ui.autoFixes < 4 -> {
+                        ui.autoFixes++
+                        ui.flash("Reconectando…")
+                        uiScope.launch { delay(2500); player.prepare(); player.seekTo(pos); player.play() }
+                    }
+                    error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW -> { player.seekToDefaultPosition(); player.prepare() }
+                    else -> ui.error = "No se pudo reproducir este video (" + error.errorCodeName.removePrefix("ERROR_CODE_").lowercase().replace('_', ' ') + (http?.let { " · ${it.responseCode}" } ?: "") + ")."
+                }
             }
         }
         player.addListener(l)
@@ -219,6 +252,7 @@ fun PlayerScreen(start: Video, queue: List<Video>, startAudioOnly: Boolean) {
             player.removeListener(l)
             player.release()
             PlayerState.active = false
+            com.mauricio.vista.data.Recs.playing = false
             PlayerState.playing = false
             DeviceUi.setPlaying(false)
         }
@@ -258,6 +292,10 @@ fun PlayerScreen(start: Video, queue: List<Video>, startAudioOnly: Boolean) {
             ui.controls = false
             if (tv) runCatching { rootFr.requestFocus() }
         }
+    }
+    // En la tele: con los controles ocultos, el foco siempre vuelve al video para que el control responda
+    LaunchedEffect(ui.controls, ui.panel, ui.ended, ui.error) {
+        if (tv && !ui.controls && ui.panel == null && !ui.ended && ui.error == null) { delay(60); runCatching { rootFr.requestFocus() } }
     }
     LaunchedEffect(ui.hintTick) { if (ui.hint.isNotEmpty()) { delay(1100); ui.hint = "" } }
 
