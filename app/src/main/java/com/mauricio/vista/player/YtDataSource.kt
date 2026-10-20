@@ -22,10 +22,11 @@ import java.io.InputStream
  * y numera cada petición con «&rn=». Basado en el YoutubeHttpDataSource de NewPipe.
  */
 @UnstableApi
-class YtDataSource(private val client: OkHttpClient) : BaseDataSource(true) {
+class YtDataSource(private val client: OkHttpClient, private val paramMode: Boolean = true) : BaseDataSource(true) {
 
-    class Factory(private val client: OkHttpClient = Net.client) : DataSource.Factory {
-        override fun createDataSource(): DataSource = YtDataSource(client)
+    /** @param paramMode true = archivos sueltos de YouTube (&range=, &rn=, POST); false = HLS (GET con Range). */
+    class Factory(private val client: OkHttpClient = Net.client, private val paramMode: Boolean = true) : DataSource.Factory {
+        override fun createDataSource(): DataSource = YtDataSource(client, paramMode)
     }
 
     private var spec: DataSpec? = null
@@ -45,7 +46,7 @@ class YtDataSource(private val client: OkHttpClient) : BaseDataSource(true) {
         transferInitializing(dataSpec)
 
         var url = dataSpec.uri.toString()
-        val isPlayback = dataSpec.uri.path?.startsWith("/videoplayback") == true
+        val isPlayback = paramMode && dataSpec.uri.path?.startsWith("/videoplayback") == true
         val unset = C.LENGTH_UNSET.toLong()
         val b = Request.Builder()
         if (isPlayback) {
@@ -67,7 +68,8 @@ class YtDataSource(private val client: OkHttpClient) : BaseDataSource(true) {
             // Casi todos los clientes de YouTube piden el video con POST
             b.post(byteArrayOf(0x78, 0).toRequestBody(null))
         } else {
-            b.url(url).header("User-Agent", Net.UA)
+            val ua = if (YoutubeParsingHelper.isVisionOsStreamingUrl(url)) YoutubeParsingHelper.getVisionOsUserAgent(null) else Net.UA
+            b.url(url).header("User-Agent", ua)
             if (dataSpec.position != 0L || dataSpec.length != unset) {
                 b.header("Range", "bytes=" + dataSpec.position + "-" + (if (dataSpec.length != unset) (dataSpec.position + dataSpec.length - 1).toString() else ""))
             }

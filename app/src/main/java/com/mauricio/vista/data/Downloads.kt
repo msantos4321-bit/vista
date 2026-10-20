@@ -143,8 +143,8 @@ object Downloads {
         val tmp = File(dir, ".tmp").apply { mkdirs() }
         val safe = item.video.title.replace(Regex("[^\\p{L}\\p{N} ._-]"), "").take(60).trim().ifBlank { item.video.id }
         if (item.audioOnly) {
-            val a = com.mauricio.vista.player.Sources.pickAudio(info, m4aOnly = true)
-                ?: com.mauricio.vista.player.Sources.pickAudio(info) ?: throw IllegalStateException("Sin audio")
+            val a = com.mauricio.vista.player.Sources.pickAudio(info, m4aOnly = true, progressiveOnly = true)
+                ?: com.mauricio.vista.player.Sources.pickAudio(info, progressiveOnly = true) ?: throw IllegalStateException("Sin audio")
             val ext = if (a.format == MediaFormat.M4A) "m4a" else "webm"
             val out = File(dir, "$safe [${item.video.id}].$ext")
             fetch(a, out) { p -> update(item.id) { it.copy(progress = p) } }
@@ -154,7 +154,7 @@ object Downloads {
         // Imagen MP4 (H.264) que no pase de la calidad pedida
         val vids = info.videoOnlyStreams.filter { it.isUrl && it.format == MediaFormat.MPEG_4 && it.itagItem != null && !it.codec.orEmpty().startsWith("av01") }
         val v = vids.filter { it.height <= item.quality }.maxByOrNull { it.height } ?: vids.minByOrNull { it.height }
-        val a = com.mauricio.vista.player.Sources.pickAudio(info, m4aOnly = true)
+        val a = com.mauricio.vista.player.Sources.pickAudio(info, m4aOnly = true, progressiveOnly = true)
         val out = File(dir, "$safe [${item.video.id}].mp4")
         if (v == null || a == null) {
             // Respaldo: el archivo con todo junto (máximo 360p)

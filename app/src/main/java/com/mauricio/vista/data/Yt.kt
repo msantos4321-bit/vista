@@ -197,6 +197,7 @@ object Yt {
                 is SignInConfirmNotBotException, is ReCaptchaException -> return "YouTube está pidiendo verificación a esta red. Espera unos minutos e inténtalo de nuevo."
                 is ContentNotAvailableException -> return "Este video ya no está disponible."
                 is java.net.UnknownHostException, is java.net.SocketTimeoutException, is java.net.ConnectException -> return "No hay conexión a internet."
+                is IllegalStateException -> if (c.message?.startsWith("YouTube") == true) return c.message + " Prueba otro video; si pasa con todos, avísame."
             }
             c = c.cause
         }

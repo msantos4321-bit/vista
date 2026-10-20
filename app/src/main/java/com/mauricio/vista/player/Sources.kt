@@ -40,9 +40,15 @@ object Sources {
         /** Altura de la calidad que se eligió (0 = solo audio / en vivo). */
         val height: Int,
         val isLive: Boolean,
+        /** La fuente trae varias calidades y el reproductor elige (HLS): hay que ponerle tope. */
+        val adaptive: Boolean = false,
+        /** Para diagnosticar: qué camino se usó. */
+        val how: String = "",
     )
 
     private val dsf by lazy { YtDataSource.Factory() }
+    /** HLS: pedidos normales (GET con Range), sin los parámetros especiales de los archivos sueltos. */
+    private val hlsDsf by lazy { YtDataSource.Factory(paramMode = false) }
     private val dash by lazy { DashMediaSource.Factory(DefaultDashChunkSource.Factory(dsf), dsf) }
 
     fun isLive(info: StreamInfo) = info.streamType == StreamType.LIVE_STREAM || info.streamType == StreamType.AUDIO_LIVE_STREAM
@@ -57,10 +63,13 @@ object Sources {
     /** Calidad «automática»: la de Wi-Fi o la de datos según la red. */
     fun autoHeight(ctx: Context) = if (onMobileData(ctx)) Store.qualityData else Store.qualityWifi
 
+    /** Archivo normal, o «OTF» (videos recién subidos: se arma su manifiesto aquí). */
+    private fun playableDelivery(s: org.schabi.newpipe.extractor.stream.Stream) =
+        s.itagItem != null && ((s.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP && s.isUrl) || (s.deliveryMethod == DeliveryMethod.DASH && !s.isUrl))
+
     private fun usable(v: VideoStream): Boolean {
         val codec = v.codec.orEmpty()
-        return v.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP && v.isUrl && v.itagItem != null &&
-            !codec.startsWith("av01") && v.format != MediaFormat.v3GPP && v.height > 0
+        return playableDelivery(v) && !codec.startsWith("av01") && v.format != MediaFormat.v3GPP && v.height > 0
     }
 
     /** Calidades disponibles para el menú (de mayor a menor). */
@@ -80,8 +89,8 @@ object Sources {
     }
 
     /** Audio original (no doblado), primero M4A, luego el de mejor calidad. */
-    fun pickAudio(info: StreamInfo, m4aOnly: Boolean = false): AudioStream? {
-        val list = info.audioStreams.filter { it.isUrl && it.itagItem != null && it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP }
+    fun pickAudio(info: StreamInfo, m4aOnly: Boolean = false, progressiveOnly: Boolean = false): AudioStream? {
+        val list = info.audioStreams.filter { playableDelivery(it) && (!progressiveOnly || it.isUrl) }
             .filter { !m4aOnly || it.format == MediaFormat.M4A }
         if (list.isEmpty()) return null
         val original = list.filter { it.audioTrackType == null || it.audioTrackType == AudioTrackType.ORIGINAL }.ifEmpty { list }
@@ -105,8 +114,9 @@ object Sources {
         return opts.firstOrNull { it.languageTag == lang } ?: opts.firstOrNull { it.languageTag.startsWith(lang) }
     }
 
-    private fun manualDash(content: String, itag: org.schabi.newpipe.extractor.services.youtube.ItagItem, durationSec: Long): MediaSource {
-        val manifest = YoutubeProgressiveDashManifestCreator.fromProgressiveStreamingUrl(content, itag, durationSec)
+    private fun manualDash(content: String, itag: org.schabi.newpipe.extractor.services.youtube.ItagItem, durationSec: Long, otf: Boolean = false): MediaSource {
+        val manifest = if (otf) org.schabi.newpipe.extractor.services.youtube.dashmanifestcreators.YoutubeOtfDashManifestCreator.fromOtfStreamingUrl(content, itag, durationSec)
+        else YoutubeProgressiveDashManifestCreator.fromProgressiveStreamingUrl(content, itag, durationSec)
         val parsed = DashManifestParser().parse(Uri.parse(content), ByteArrayInputStream(manifest.toByteArray()))
         return dash.createMediaSource(parsed, MediaItem.Builder().setUri(Uri.parse(content)).build())
     }
@@ -132,34 +142,63 @@ object Sources {
      * @param maxH altura máxima de video (0 = solo audio)
      * @param sub subtítulo a mostrar (o null)
      */
-    fun build(info: StreamInfo, maxH: Int, sub: SubtitlesStream?, h264Only: Boolean = false): Built {
+    private fun streamSource(st: org.schabi.newpipe.extractor.stream.Stream, info: StreamInfo): MediaSource =
+        if (!st.isUrl) manualDash(st.content, st.itagItem!!, info.duration, otf = true)
+        else runCatching { manualDash(st.content, st.itagItem!!, info.duration) }.getOrElse { progressive(st.content) }
+
+    /** Lo que trajo YouTube, para el reporte de errores. */
+    fun describe(info: StreamInfo): String =
+        "videoOnly=" + info.videoOnlyStreams.groupingBy { it.deliveryMethod.name + (if (it.isUrl) "" else "*") }.eachCount() +
+            " audio=" + info.audioStreams.groupingBy { it.deliveryMethod.name + (if (it.isUrl) "" else "*") }.eachCount() +
+            " muxed=" + info.videoStreams.size + " hls=" + (!info.hlsUrl.isNullOrBlank()) + " dash=" + (!info.dashMpdUrl.isNullOrBlank()) + " tipo=" + info.streamType
+
+    /**
+     * @param maxH altura máxima de video (0 = solo audio)
+     * @param sub subtítulo a mostrar (o null)
+     * @param h264Only solo formatos que aguanta cualquier aparato
+     * @param skipSeparate brincar las pistas separadas e ir directo al respaldo (HLS)
+     */
+    fun build(info: StreamInfo, maxH: Int, sub: SubtitlesStream?, h264Only: Boolean = false, skipSeparate: Boolean = false): Built {
         if (isLive(info)) {
             val hls = info.hlsUrl
-            val src = if (!hls.isNullOrBlank()) HlsMediaSource.Factory(dsf).createMediaSource(MediaItem.fromUri(hls))
+            val src = if (!hls.isNullOrBlank()) HlsMediaSource.Factory(hlsDsf).createMediaSource(MediaItem.fromUri(hls))
             else dash.createMediaSource(MediaItem.fromUri(info.dashMpdUrl))
-            return Built(src, 0, true)
+            return Built(src, 0, true, adaptive = true, how = "en vivo")
         }
-        val parts = ArrayList<MediaSource>()
-        var height = 0
-        val audio = pickAudio(info)
-        val video = if (maxH > 0) pickVideo(info, maxH, h264Only) else null
-        if (video != null) {
-            parts += runCatching { manualDash(video.content, video.itagItem!!, info.duration) }.getOrElse { progressive(video.content) }
-            height = video.height
-        }
-        if (audio != null) {
-            parts += runCatching { manualDash(audio.content, audio.itagItem!!, info.duration) }.getOrElse { progressive(audio.content) }
-        }
-        if (parts.isEmpty() || (maxH > 0 && video == null)) {
-            // Sin pistas separadas: el archivo de siempre con video y audio juntos
-            val muxed = info.videoStreams.filter { it.isUrl }.let { l -> l.filter { it.height <= maxOf(maxH, 360) }.maxByOrNull { it.height } ?: l.minByOrNull { it.height } }
-            if (muxed != null) {
-                parts.clear(); parts += progressive(muxed.content); height = muxed.height
+        // 1) Imagen y sonido por separado (la mejor calidad)
+        if (!skipSeparate) runCatching {
+            val audio = pickAudio(info)
+            val video = if (maxH > 0) pickVideo(info, maxH, h264Only) else null
+            val parts = ArrayList<MediaSource>()
+            if (video != null) parts += streamSource(video, info)
+            if (audio != null) parts += streamSource(audio, info)
+            val ok = if (maxH > 0) video != null && audio != null else audio != null
+            if (ok) {
+                if (sub != null && maxH > 0) parts += subtitleSource(sub)
+                val src = if (parts.size == 1) parts[0] else MergingMediaSource(true, *parts.toTypedArray())
+                return Built(src, video?.height ?: 0, false, how = "separado" + if (video?.isUrl == false) " otf" else "")
             }
         }
-        if (parts.isEmpty()) throw IllegalStateException("Este video no trae ningún formato que se pueda reproducir.")
-        if (sub != null && maxH > 0) parts += subtitleSource(sub)
-        val src = if (parts.size == 1) parts[0] else MergingMediaSource(true, *parts.toTypedArray())
-        return Built(src, height, false)
+        // 2) Archivo con todo junto (hasta 360p, pero casi siempre existe)
+        if (!skipSeparate) {
+            val muxed = info.videoStreams.filter { it.isUrl && it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP }
+                .let { l -> l.filter { it.height <= maxOf(maxH, 360) }.maxByOrNull { it.height } ?: l.minByOrNull { it.height } }
+            if (muxed != null && maxH > 0) {
+                val parts = arrayListOf<MediaSource>(progressive(muxed.content))
+                if (sub != null) parts += subtitleSource(sub)
+                return Built(if (parts.size == 1) parts[0] else MergingMediaSource(true, *parts.toTypedArray()), muxed.height, false, how = "junto")
+            }
+        }
+        // 3) HLS (lista con varias calidades; el reproductor elige sin pasar del tope)
+        if (!info.hlsUrl.isNullOrBlank()) {
+            val parts = arrayListOf<MediaSource>(HlsMediaSource.Factory(hlsDsf).createMediaSource(MediaItem.fromUri(info.hlsUrl)))
+            if (sub != null && maxH > 0) parts += subtitleSource(sub)
+            return Built(if (parts.size == 1) parts[0] else MergingMediaSource(true, *parts.toTypedArray()), maxH, false, adaptive = true, how = "hls")
+        }
+        // 4) DASH de YouTube
+        if (!info.dashMpdUrl.isNullOrBlank()) {
+            return Built(dash.createMediaSource(MediaItem.fromUri(info.dashMpdUrl)), maxH, false, adaptive = true, how = "dash")
+        }
+        throw IllegalStateException("YouTube no mandó ningún formato que se pueda reproducir para este video.")
     }
 }

@@ -82,6 +82,9 @@ class PlayerUi(val player: ExoPlayer) {
     /** Tras un error del decodificador: solo H.264 (lo aguanta cualquier aparato). */
     var safeMode by mutableStateOf(false)
     var autoFixes = 0
+    /** Si las pistas separadas fallan, se usa la lista HLS de YouTube. */
+    var useHls by mutableStateOf(false)
+    var how = ""
     var height by mutableIntStateOf(0)
     var subtitle by mutableStateOf<SubtitlesStream?>(null)
     var speed by mutableFloatStateOf(Store.speed)
@@ -138,13 +141,21 @@ fun PlayerScreen(start: Video, queue: List<Video>, startAudioOnly: Boolean) {
         val info = ui.info ?: return
         try {
             val maxH = if (ui.audioOnly) 0 else if (ui.chosenQuality > 0) ui.chosenQuality else Sources.autoHeight(ctx)
-            val built = Sources.build(info, maxH, ui.subtitle, ui.safeMode)
+            val built = Sources.build(info, maxH, ui.subtitle, ui.safeMode, skipSeparate = ui.useHls)
             ui.height = built.height
+            ui.how = built.how
+            // Con HLS el reproductor escoge la calidad: se le pone tope (y sin video si es solo audio)
+            player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                .setMaxVideoSize(Int.MAX_VALUE, if (built.adaptive && maxH > 0) maxH else Int.MAX_VALUE)
+                .setTrackTypeDisabled(MC.TRACK_TYPE_VIDEO, maxH == 0 && !built.isLive && built.adaptive)
+                .build()
             player.setMediaSource(built.source, posMs.coerceAtLeast(0))
             player.prepare()
             player.playWhenReady = play
             ui.error = null
         } catch (e: Exception) {
+            Store.lastError = "Al armar el video ${ui.video.id}: ${e.javaClass.simpleName} ${e.message} · ${Sources.describe(info)} · " +
+                android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL + " Android " + android.os.Build.VERSION.RELEASE + "\n" + android.util.Log.getStackTraceString(e).take(2500)
             ui.error = Yt.friendly(e)
         }
     }
@@ -183,7 +194,10 @@ fun PlayerScreen(start: Video, queue: List<Video>, startAudioOnly: Boolean) {
                     load(if (Sources.isLive(info)) 0 else resume)
                     ui.loading = false
                 }
-                .onFailure { ui.error = Yt.friendly(it); ui.loading = false }
+                .onFailure {
+                    Store.lastError = "Al cargar el video ${start.id}: " + android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL + " Android " + android.os.Build.VERSION.RELEASE + "\n" + android.util.Log.getStackTraceString(it).take(3500)
+                    ui.error = Yt.friendly(it); ui.loading = false
+                }
         }
         ui.segments = runCatching { SponsorBlock.segments(start.id) }.getOrDefault(emptyList())
     }
@@ -221,12 +235,15 @@ fun PlayerScreen(start: Video, queue: List<Video>, startAudioOnly: Boolean) {
                     PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED, PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
                     PlaybackException.ERROR_CODE_TIMEOUT, PlaybackException.ERROR_CODE_IO_UNSPECIFIED,
                 )
-                com.mauricio.vista.data.Store.lastError = "Video ${ui.video.id} · ${error.errorCodeName} · ${http?.responseCode ?: ""} · calidad ${ui.height} · " +
+                com.mauricio.vista.data.Store.lastError = "Video ${ui.video.id} · ${error.errorCodeName} · ${http?.responseCode ?: ""} · calidad ${ui.height} · ${ui.how} · " +
                     android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL + " Android " + android.os.Build.VERSION.RELEASE + "\n" + android.util.Log.getStackTraceString(error).take(3000)
                 when {
                     // Las ligas de YouTube caducan: se piden de nuevo en silencio
                     http != null && (http.responseCode == 403 || http.responseCode == 410) && retry < 2 && !ui.offline -> { ui.flash("Reconectando…"); retry++ }
+                    // Si YouTube no deja bajar las pistas sueltas, se cambia a su lista HLS
+                    http != null && !ui.useHls && !ui.offline && !ui.info?.hlsUrl.isNullOrBlank() -> { ui.flash("Cambiando de servidor…"); ui.useHls = true; load(pos) }
                     // El aparato no pudo con ese formato: se cambia a uno más sencillo sin preguntar
+                    decoder && !ui.offline && ui.autoFixes >= 2 && !ui.useHls && !ui.info?.hlsUrl.isNullOrBlank() -> { ui.useHls = true; ui.flash("Probando otro formato…"); load(pos) }
                     decoder && !ui.offline && ui.autoFixes < 3 -> {
                         ui.autoFixes++
                         ui.flash("Ajustando el video para este aparato…")
