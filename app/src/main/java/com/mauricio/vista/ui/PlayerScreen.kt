@@ -72,6 +72,8 @@ object PlayerState {
     var inPip by mutableStateOf(false)
     /** Minimizado abajo mientras se navega (celular). */
     var mini by mutableStateOf(false)
+    /** Video que mandó el celular con el punto donde iba (id → milisegundos). */
+    @Volatile var castStart: Pair<String, Long>? = null
 }
 
 /** Todo lo que la pantalla del reproductor comparte con sus controles. */
@@ -176,7 +178,9 @@ fun PlayerScreen(start: Video, queue: List<Video>, startAudioOnly: Boolean, mini
         ui.error = null
         val local = Downloads.localFile(start.id)
         val saved = Store.watched(start.id)
-        val resume = if (saved != null && !saved.finished && saved.posMs > 10_000) saved.posMs else 0L
+        val cast = PlayerState.castStart?.takeIf { it.first == start.id }
+        if (cast != null) PlayerState.castStart = null
+        val resume = cast?.second?.takeIf { it > 0 } ?: if (saved != null && !saved.finished && saved.posMs > 10_000) saved.posMs else 0L
         if (local != null && retry == 0) {
             // Descargado: se ve sin internet
             ui.offline = true
@@ -287,7 +291,38 @@ fun PlayerScreen(start: Video, queue: List<Video>, startAudioOnly: Boolean, mini
             }
         }
         player.addListener(l)
+        // El celular puede ver y manejar lo que se reproduce aquí (control remoto)
+        val hubState: () -> org.json.JSONObject = {
+            val o = org.json.JSONObject()
+            o.put("video", ui.video.toJson().put("id", ui.video.id).put("thumbHq", ui.video.thumbHq))
+            o.put("pos", player.currentPosition).put("dur", ui.duration).put("playing", ui.isPlaying)
+            o.put("buffering", ui.buffering || ui.loading).put("ended", ui.ended).put("live", ui.video.live)
+            o.put("error", ui.error ?: "").put("audio", ui.audioOnly).put("speed", ui.speed.toDouble())
+            ui.next?.let { o.put("next", it.toJson()) }
+            val rel = org.json.JSONArray(); ui.related.take(15).forEach { rel.put(it.toJson()) }
+            o.put("related", rel)
+        }
+        val hubControl: (org.json.JSONObject) -> Boolean = { c ->
+            val v = c.optLong("v")
+            when (c.optString("a")) {
+                "toggle" -> { ui.toggle(); ui.showControls(); true }
+                "play" -> { player.play(); true }
+                "pause" -> { player.pause(); ui.showControls(); true }
+                "seek" -> { ui.seekBy(v); ui.showControls(); true }
+                "seekto" -> { val d = ui.duration; player.seekTo(if (d > 0) v.coerceIn(0, d) else v.coerceAtLeast(0)); ui.showControls(); true }
+                "restart" -> { player.seekTo(0); player.play(); true }
+                "live" -> { player.seekToDefaultPosition(); player.play(); true }
+                "next" -> { ui.next?.let { ui.goNext(it); true } ?: false }
+                "audio" -> { ui.audioOnly = !ui.audioOnly; true }
+                "stop" -> { onClose(); true }
+                else -> false
+            }
+        }
+        com.mauricio.vista.data.Remote.nowPlaying = hubState
+        com.mauricio.vista.data.Remote.onControl = hubControl
         onDispose {
+            if (com.mauricio.vista.data.Remote.nowPlaying === hubState) com.mauricio.vista.data.Remote.nowPlaying = null
+            if (com.mauricio.vista.data.Remote.onControl === hubControl) com.mauricio.vista.data.Remote.onControl = null
             val d = player.duration
             if (d != MC.TIME_UNSET && d > 0 && !ui.video.live && ui.video.title != "Cargando…") Store.saveProgress(ui.video, player.currentPosition, d)
             player.removeListener(l)

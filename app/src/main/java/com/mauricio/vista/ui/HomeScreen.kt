@@ -127,8 +127,8 @@ private fun buildRows(): List<HomeRow> {
     val cont = history.filter { !it.finished && it.posMs > 15_000 }.take(20)
     if (cont.isNotEmpty()) out += HomeRow("cont", "Continuar viendo", cont.map { it.video }, cont.associate { it.video.id to it.progress })
     if (forYou.isNotEmpty()) out += HomeRow("foryou", "Para ti", forYou.take(30))
-    val f = feed.clean()
-    if (f.isNotEmpty()) out += HomeRow("feed", "Nuevos de tus suscripciones", f.take(30))
+    // Lo de tus canales vive en «Suscripciones»; aquí va lo recomendado en general
+    if (forYou.isEmpty()) feed.clean().takeIf { it.isNotEmpty() }?.let { out += HomeRow("feed", "Nuevos de tus suscripciones", it.take(30)) }
     if (chans.isNotEmpty()) out += HomeRow("chans", "Canales que quizá te gusten", emptyList(), chans = chans)
     Store.topics.forEach { t -> topics[t]?.clean()?.takeIf { it.isNotEmpty() }?.let { out += HomeRow("t:$t", t, it) } }
     if (later.isNotEmpty()) out += HomeRow("later", "Ver después", later.take(30))
@@ -229,13 +229,15 @@ private fun PhoneHome() {
     val tick by Store.settingsTick.collectAsState()
     var tab by remember { mutableStateOf("foryou") }
     val topics = if (tick >= 0) Store.topics else emptyList()
-    val tabs = listOf("foryou" to "Para ti", "feed" to "Suscripciones") +
+    // Lo de tus canales está en la pestaña «Suscripciones»; aquí todo es recomendado en general
+    val tabs = listOf("foryou" to "Para ti") +
         topics.map { "t:$it" to it } +
         (if (com.mauricio.vista.data.Profiles.isKids) emptyList() else HomeData.kiosks.map { it.first to it.second.substringBefore(" de ").replace("Tendencias en música", "Música") })
     val cont = history.filter { !it.finished && it.posMs > 15_000 }.take(15)
-    // «Para ti»: recomendaciones con lo nuevo de tus canales intercalado (2 y 1)
-    val mixed = remember(forYou, feed) {
-        val a = forYou.clean(); val b = feed.clean().take(40)
+    // «Para ti»: recomendaciones con lo popular de tus temas intercalado (2 y 1); sin historial, lo nuevo de tus canales
+    val mixed = remember(forYou, feed, topicRows) {
+        val general = (topics.flatMap { topicRows[it].orEmpty() } + HomeData.kiosks.flatMap { HomeData.rows[it.first].orEmpty() }).clean().shuffled(java.util.Random(forYou.size.toLong())).take(60)
+        val a = forYou.clean().ifEmpty { feed.clean().take(30) }; val b = general
         val out = ArrayList<Video>(); val seen = HashSet<String>()
         var i = 0; var j = 0
         while (i < a.size || j < b.size) {
@@ -260,7 +262,7 @@ private fun PhoneHome() {
                     Text("▶", color = C.OnAccent, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 }
                 Text("  Vista", color = C.Hi, fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                if (Store.tvAddress.isNotBlank()) ActionButton("", { nav.go(Route.Connect) }, icon = Icons.Filled.Cast)
+                if (Store.devices.isNotEmpty()) ActionButton("", { nav.go(Route.RemoteTv) }, icon = Icons.Filled.Cast)
                 if (com.mauricio.vista.data.Profiles.list.value.size > 1) {
                     Spacer(Modifier.width(6.dp))
                     Surface(onClick = { profilePickerOpen.value = true }, shape = androidx.tv.material3.ClickableSurfaceDefaults.shape(androidx.compose.foundation.shape.CircleShape)) {

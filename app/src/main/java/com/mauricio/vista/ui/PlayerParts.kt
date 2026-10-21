@@ -111,6 +111,7 @@ private val Dim = Color(0xFFD1D1D6)
 // ======================================================================
 @Composable
 fun PlayerOverlay(ui: PlayerUi, tv: Boolean, immersive: Boolean, onBack: () -> Unit, onRetry: () -> Unit) {
+    val nav = LocalNav.current
     // Toques en el celular: uno muestra/oculta, doble a los lados adelanta o regresa
     if (!tv) {
         Box(
@@ -150,13 +151,7 @@ fun PlayerOverlay(ui: PlayerUi, tv: Boolean, immersive: Boolean, onBack: () -> U
                     }
                 }
                 if (!tv) {
-                    if (Store.tvAddress.isNotBlank()) IconBtn(Icons.Filled.Cast, "Ver en la tele", onClick = {
-                        uiScope.launch {
-                            val ok = Remote.sendPlay(Yt.watchUrl(ui.video.id))
-                            Toast.show(if (ok) "Listo, mira la tele" else "No encontré la tele")
-                            if (ok) ui.player.pause()
-                        }
-                    })
+                    if (Store.devices.isNotEmpty()) IconBtn(Icons.Filled.Cast, "Ver en la tele", onClick = { castToTv(ui, nav) })
                     IconBtn(Icons.Filled.Settings, "Opciones", onClick = { ui.panel = "menu" })
                 } else {
                     ClockLabel()
@@ -165,21 +160,24 @@ fun PlayerOverlay(ui: PlayerUi, tv: Boolean, immersive: Boolean, onBack: () -> U
 
             // Centro (celular): botones grandes
             if (!tv && ui.error == null) {
-                Row(Modifier.align(Alignment.Center), horizontalArrangement = Arrangement.spacedBy(36.dp), verticalAlignment = Alignment.CenterVertically) {
-                    IconBtn(Icons.Filled.Replay10, "Regresar 10 s", { ui.seekBy(-10_000) }, 34.dp)
+                val big = immersive
+                Row(Modifier.align(Alignment.Center), horizontalArrangement = Arrangement.spacedBy(if (big) 40.dp else 24.dp), verticalAlignment = Alignment.CenterVertically) {
+                    RoundBtn(Icons.Filled.Replay10, "Regresar 10 s", if (big) 34.dp else 28.dp) { ui.seekBy(-10_000); ui.showControls() }
                     if (!(ui.loading || ui.buffering) || ui.ended) {
-                        IconBtn(if (ui.ended) Icons.Filled.Replay else if (ui.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, "Reproducir", { ui.toggle(); ui.showControls() }, 54.dp)
-                    } else Spacer(Modifier.size(70.dp))
-                    IconBtn(Icons.Filled.Forward10, "Adelantar 10 s", { ui.seekBy(10_000) }, 34.dp)
+                        RoundBtn(if (ui.ended) Icons.Filled.Replay else if (ui.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, if (ui.isPlaying) "Pausa" else "Reproducir", if (big) 50.dp else 40.dp) { ui.toggle(); ui.showControls() }
+                    } else Spacer(Modifier.size(if (big) 74.dp else 64.dp))
+                    RoundBtn(Icons.Filled.Forward10, "Adelantar 10 s", if (big) 34.dp else 28.dp) { ui.seekBy(10_000); ui.showControls() }
+                    ui.next?.let { n -> RoundBtn(Icons.Filled.SkipNext, "Siguiente", if (big) 30.dp else 24.dp) { ui.goNext(n) } }
                 }
             }
 
             // Abajo: barra de avance y botones
             Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = if (tv) 40.dp else 12.dp, vertical = if (tv) 24.dp else 4.dp)) {
-                if (!ui.video.live) {
+                if (!ui.video.live || ui.duration > 60_000) {
                     SeekBar(ui, tv)
                     Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(Fmt.clock(ui.position) + " / " + Fmt.clock(ui.duration), color = Dim, fontSize = if (tv) 13.sp else 12.sp)
+                        if (ui.video.live) LiveBadge(ui, tv)
+                        else Text(Fmt.clock(ui.position) + " / " + Fmt.clock(ui.duration), color = Dim, fontSize = if (tv) 13.sp else 12.sp)
                         currentChapter(ui)?.let { Text("  ·  $it", color = Dim, fontSize = if (tv) 13.sp else 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false)) }
                         Spacer(Modifier.weight(1f))
                         if (!tv) {
@@ -188,11 +186,13 @@ fun PlayerOverlay(ui: PlayerUi, tv: Boolean, immersive: Boolean, onBack: () -> U
                         }
                     }
                 } else {
-                    Text("● EN VIVO", color = C.Live, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    LiveBadge(ui, tv)
                 }
                 if (tv) {
                     Spacer(Modifier.height(14.dp))
                     TvButtons(ui)
+                } else if (immersive) {
+                    PhoneBottomButtons(ui)
                 }
             }
 
@@ -240,6 +240,87 @@ private fun IconBtn(icon: ImageVector, label: String, onClick: () -> Unit, size:
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.1f, pressedScale = 0.9f),
         colors = ClickableSurfaceDefaults.colors(containerColor = Color.Transparent, contentColor = White, focusedContainerColor = Color(0x33FFFFFF), pressedContainerColor = Color(0x33FFFFFF)),
     ) { Icon(icon, label, Modifier.padding(8.dp).size(size)) }
+}
+
+/** Botón redondo con fondo oscuro (se ve sobre cualquier imagen). */
+@Composable
+private fun RoundBtn(icon: ImageVector, label: String, size: Dp, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = ClickableSurfaceDefaults.shape(CircleShape),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.06f, pressedScale = 0.9f),
+        colors = ClickableSurfaceDefaults.colors(containerColor = Color(0x80000000), contentColor = White, focusedContainerColor = Color(0xA0000000), pressedContainerColor = Color(0x55FFFFFF)),
+    ) { Icon(icon, label, Modifier.padding(size * 0.32f).size(size)) }
+}
+
+/** ¿Sigues el canal de este video? Para suscribirte o quitarlo desde el reproductor. */
+fun isSubscribedTo(ui: PlayerUi, subs: List<com.mauricio.vista.data.Chan>): Boolean {
+    val cu = ui.video.channelUrl
+    if (cu.isBlank()) return false
+    val k = Store.channelKey(cu)
+    return subs.any { s -> Store.channelKey(s.url) == k }
+}
+
+fun toggleSubscribe(ui: PlayerUi, subscribed: Boolean) {
+    val v = ui.video
+    if (v.channelUrl.isBlank()) return
+    if (subscribed) { Store.unsubscribe(v.channelUrl); Toast.show("Ya no sigues a ${v.channel}") }
+    else {
+        Store.subscribe(com.mauricio.vista.data.Chan(v.channelUrl, v.channel, Yt.bestImage(ui.info?.uploaderAvatars, 240), ui.info?.uploaderSubscriberCount ?: -1))
+        Toast.show("Suscrito a ${v.channel}")
+    }
+}
+
+@Composable
+private fun SubscribeButton(ui: PlayerUi) {
+    val subs by Store.subs.collectAsState()
+    if (ui.video.channelUrl.isBlank()) return
+    val on = isSubscribedTo(ui, subs)
+    ActionButton(if (on) "Suscrito" else "Suscribirme", { toggleSubscribe(ui, on); ui.controlsTick++ }, icon = if (on) Icons.Filled.Check else Icons.Filled.Subscriptions, active = on, primary = !on)
+}
+
+/** Pantalla completa del celular: suscribirte, la cola y la tele, abajo. */
+@Composable
+private fun PhoneBottomButtons(ui: PlayerUi) {
+    val nav = LocalNav.current
+    val qn = com.mauricio.vista.data.Queue.items.collectAsState().value.size
+    Row(Modifier.fillMaxWidth().horizontalScroll(androidx.compose.foundation.rememberScrollState()).padding(top = 2.dp, bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        SubscribeButton(ui)
+        ActionButton(if (qn > 0) "A continuación ($qn)" else "A continuación", { ui.panel = "queue" }, icon = Icons.AutoMirrored.Filled.QueueMusic, active = qn > 0)
+        if (Store.devices.isNotEmpty()) ActionButton("En la tele", { castToTv(ui, nav) }, icon = Icons.Filled.Cast)
+        if (ui.related.isNotEmpty()) ActionButton("Más videos", { ui.panel = "related" }, icon = Icons.Filled.VideoLibrary)
+    }
+}
+
+/** En vivo: cuánto vas atrás y botón para volver al directo. */
+@Composable
+private fun LiveBadge(ui: PlayerUi, tv: Boolean) {
+    val behind = (ui.duration - ui.position).coerceAtLeast(0)
+    val atEdge = ui.duration <= 0 || behind < 20_000
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Surface(
+            onClick = { ui.player.seekToDefaultPosition(); ui.player.play(); ui.flash("En vivo") },
+            shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(50)),
+            scale = ClickableSurfaceDefaults.scale(focusedScale = 1.06f),
+            colors = ClickableSurfaceDefaults.colors(containerColor = if (atEdge) C.Live else Color(0x55FFFFFF), contentColor = White, focusedContainerColor = C.Live),
+        ) { Text("● EN VIVO", fontSize = if (tv) 13.sp else 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)) }
+        if (!atEdge) Text("  −" + Fmt.clock(behind) + "  (toca «En vivo» para ir al directo)", color = Dim, fontSize = if (tv) 13.sp else 12.sp, maxLines = 1)
+        else if (ui.duration > 60_000) Text("  Desliza la barra para regresar", color = Dim, fontSize = if (tv) 13.sp else 12.sp, maxLines = 1)
+    }
+}
+
+/** Manda el video a la tele en el mismo punto, pausa aquí y abre el control remoto. */
+fun castToTv(ui: PlayerUi, nav: Nav) {
+    uiScope.launch {
+        Toast.show("Buscando la tele…")
+        val pos = if (ui.video.live) -1 else ui.player.currentPosition
+        val ok = Remote.sendPlay(Yt.watchUrl(ui.video.id), pos)
+        if (ok) {
+            ui.player.pause()
+            Toast.show("Listo, mira la tele")
+            nav.go(Route.RemoteTv)
+        } else Toast.show("No encontré la tele. Revisa que esté prendida con Vista abierta y en el mismo Wi-Fi.")
+    }
 }
 
 // ======================================================================
@@ -322,6 +403,7 @@ private fun SeekBar(ui: PlayerUi, tv: Boolean) {
 private fun TvButtons(ui: PlayerUi) {
     Row(Modifier.horizontalScroll(androidx.compose.foundation.rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
         ActionButton(if (ui.isPlaying) "Pausa" else "Reproducir", { ui.toggle() }, icon = if (ui.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, primary = true)
+        SubscribeButton(ui)
         ui.next?.let { n -> ActionButton("Siguiente", { ui.goNext(n) }, icon = Icons.Filled.SkipNext) }
         val qn = com.mauricio.vista.data.Queue.items.collectAsState().value.size
         ActionButton(if (qn > 0) "A continuación ($qn)" else "A continuación", { ui.panel = "queue" }, icon = Icons.AutoMirrored.Filled.QueueMusic, active = qn > 0)
@@ -505,7 +587,7 @@ fun PhoneWatchPage(ui: PlayerUi, videoSurface: @Composable () -> Unit, onReload:
     val qItems by com.mauricio.vista.data.Queue.items.collectAsState()
     var dlOpen by remember { mutableStateOf(false) }
     val v = ui.video
-    val subscribed = subs.any { s -> s.url == v.channelUrl || (s.channelId != null && v.channelUrl.contains(s.channelId!!)) }
+    val subscribed = isSubscribedTo(ui, subs)
     val dl = downloads.firstOrNull { it.video.id == v.id }
 
     Column(Modifier.fillMaxSize().background(C.Bg)) {
@@ -541,13 +623,7 @@ fun PhoneWatchPage(ui: PlayerUi, videoSurface: @Composable () -> Unit, onReload:
                     }
                     if (v.channelUrl.isNotBlank()) ActionButton(
                         if (subscribed) "Suscrito" else "Suscribirme",
-                        {
-                            if (subscribed) Store.unsubscribe(v.channelUrl)
-                            else {
-                                Store.subscribe(com.mauricio.vista.data.Chan(v.channelUrl, v.channel, Yt.bestImage(ui.info?.uploaderAvatars, 240), ui.info?.uploaderSubscriberCount ?: -1))
-                                Toast.show("Suscrito a ${v.channel}")
-                            }
-                        },
+                        { toggleSubscribe(ui, subscribed) },
                         icon = if (subscribed) Icons.Filled.Check else Icons.Filled.Subscriptions, primary = !subscribed,
                     )
                 }
@@ -567,14 +643,8 @@ fun PhoneWatchPage(ui: PlayerUi, videoSurface: @Composable () -> Unit, onReload:
                         val isLater = later.any { it.id == v.id }
                         ActionButton(if (isLater) "Guardado" else "Ver después", { Store.toggleLater(v) }, icon = if (isLater) Icons.Filled.Check else Icons.Filled.WatchLater, active = isLater)
                     }
-                    if (Store.tvAddress.isNotBlank()) item {
-                        ActionButton("En la tele", {
-                            uiScope.launch {
-                                val ok = Remote.sendPlay(Yt.watchUrl(v.id))
-                                Toast.show(if (ok) "Listo, mira la tele" else "No encontré la tele")
-                                if (ok) ui.player.pause()
-                            }
-                        }, icon = Icons.Filled.Cast)
+                    if (Store.devices.isNotEmpty()) item {
+                        ActionButton("En la tele", { castToTv(ui, nav) }, icon = Icons.Filled.Cast)
                     }
                     item {
                         ActionButton("Compartir", {

@@ -115,9 +115,10 @@ fun VideoMenu(v: Video, onClose: () -> Unit) {
                 if (v.channelUrl.isNotBlank()) MenuRow(Icons.Filled.Subscriptions, "Ir al canal") { onClose(); nav.channel(v.channelUrl, v.channel) }
                 if (!DeviceUi.isTv) {
                     MenuRow(Icons.Filled.Download, "Descargar") { showQuality = true }
-                    if (Store.tvAddress.isNotBlank()) MenuRow(Icons.Filled.Cast, "Ver en la tele") {
-                        uiScope.launch { Toast.show(if (Remote.sendPlay(v.url)) "Listo, mira la tele" else "No encontré la tele. ¿Está prendida con Vista abierta?") }
-                        onClose()
+                    if (Store.devices.isNotEmpty()) {
+                        MenuRow(Icons.Filled.Cast, "Ver en la tele") { onClose(); playOnTv(v, nav) }
+                        MenuRow(Icons.AutoMirrored.Filled.PlaylistAdd, "Agregar a la cola de la tele") { onClose(); sendToTvQueue(v) }
+                        MenuRow(Icons.Filled.SkipNext, "Siguiente en la tele") { onClose(); sendToTvQueue(v, next = true) }
                     }
                     MenuRow(Icons.Filled.Share, "Compartir") {
                         runCatching {
@@ -161,6 +162,9 @@ fun MenuRow(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String,
 // ======================================================================
 // Suscripciones: canales arriba, novedades abajo
 // ======================================================================
+/** Se recuerda mientras la app está abierta. */
+private var subsMode = "new"
+
 @Composable
 fun SubsScreen() {
     val nav = LocalNav.current
@@ -171,7 +175,12 @@ fun SubsScreen() {
     val mem = remember { nav.memory("subs") }
     val first = remember { FocusRequester() }
     LaunchedEffect(subs.size) { Feed.refresh() }
-    val list = if (Store.hideShorts) feed.filterNot { it.short } else feed
+    // Dos formas de ver lo de tus canales: lo más reciente o recomendado para ti
+    var mode by remember { mutableStateOf(subsMode) }
+    val history by Store.history.collectAsState()
+    val recent = if (Store.hideShorts) feed.filterNot { it.short } else feed
+    val recommended = remember(feed, history.size) { com.mauricio.vista.data.Recs.fromSubs(feed) }
+    val list = if (mode == "rec") recommended else recent
     val tv = DeviceUi.isTv
 
     if (subs.isEmpty()) {
@@ -213,6 +222,10 @@ fun SubsScreen() {
                             modifier = Modifier.rememberFocus(mem, "c:" + c.url).then(if (i == 0) Modifier.focusRequester(first) else Modifier),
                         )
                     }
+                }
+                Row(Modifier.padding(start = if (tv) 0.dp else 12.dp, top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Pill("Más recientes", mode == "new", { mode = "new"; subsMode = "new" })
+                    Pill("Recomendados para ti", mode == "rec", { mode = "rec"; subsMode = "rec" })
                 }
                 (st as? Feed.State.Loading)?.let { s ->
                     Text("Revisando ${s.done} de ${s.total} canales…", color = C.Low, fontSize = 12.sp, modifier = Modifier.padding(start = if (tv) 0.dp else 16.dp, top = 8.dp))

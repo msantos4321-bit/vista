@@ -21,6 +21,8 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -56,6 +58,7 @@ import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
 import com.mauricio.vista.BuildConfig
 import com.mauricio.vista.data.Downloads
+import com.mauricio.vista.data.Feed
 import com.mauricio.vista.data.Fmt
 import com.mauricio.vista.data.Remote
 import com.mauricio.vista.data.SponsorBlock
@@ -236,6 +239,7 @@ fun SettingsScreen() {
     val tv = DeviceUi.isTv
     var choice by remember { mutableStateOf<Choice?>(null) }
     var sbOpen by remember { mutableStateOf(false) }
+    var cleanMonths by remember { mutableStateOf(0) }
     var importing by remember { mutableStateOf(false) }
     var errorOpen by remember { mutableStateOf(false) }
     val first = remember { FocusRequester() }
@@ -266,10 +270,7 @@ fun SettingsScreen() {
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         if (tv) Text("Ajustes", color = C.Hi, fontSize = 26.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 8.dp))
-        else Row(verticalAlignment = Alignment.CenterVertically) {
-            ActionButton("", { nav.back() }, icon = Icons.AutoMirrored.Filled.ArrowBack)
-            PhoneTopBar("Ajustes")
-        }
+        else PhoneTopBar("Ajustes")
         Group("Suscripción")
         SettingRow("Tu suscripción", com.mauricio.vista.data.License.code.ifBlank { "Sin código" }) { subscriptionOpen.value = true }
         Group("Perfiles")
@@ -312,6 +313,11 @@ fun SettingsScreen() {
         if (Store.sponsorBlock) SettingRow("Qué se salta", Store.sbCategories.size.toString() + " tipos") { sbOpen = true }
 
         Group("Suscripciones (${subs.size})")
+        // Menos canales = novedades más rápidas
+        val inactive6 = remember(subs.size, Feed.lastUpload.size) { Feed.inactive(6).size }
+        val inactive12 = remember(subs.size, Feed.lastUpload.size) { Feed.inactive(12).size }
+        SettingRow("Quitar canales sin videos en 6 meses", if (Feed.lastUpload.isEmpty()) "Abre Suscripciones primero" else "$inactive6 canales") { if (inactive6 > 0) cleanMonths = 6 }
+        SettingRow("Quitar canales sin videos en 1 año", if (Feed.lastUpload.isEmpty()) "Abre Suscripciones primero" else "$inactive12 canales") { if (inactive12 > 0) cleanMonths = 12 }
         if (tv) {
             SettingRow("Conectar el celular / recibir cuenta", "Abrir") { nav.go(Route.Connect) }
         } else {
@@ -351,6 +357,16 @@ fun SettingsScreen() {
 
     choice?.let { c -> ChoiceDialog(c) { choice = null } }
     if (topicPickerOpen.value) TopicPicker { topicPickerOpen.value = false }
+    if (cleanMonths > 0) {
+        val list = remember(cleanMonths) { Feed.inactive(cleanMonths) }
+        ConfirmDialog(
+            "¿Quitar ${list.size} canales?",
+            "No han subido nada en ${if (cleanMonths == 12) "un año" else "$cleanMonths meses"}: " + list.take(8).joinToString(", ") { it.name.ifBlank { "sin nombre" } } + if (list.size > 8) " y ${list.size - 8} más." else ".",
+            "Quitar",
+            { list.forEach { Store.unsubscribe(it.url) }; Toast.show("Listo: quité ${list.size} canales"); cleanMonths = 0; uiScope.launch { Feed.refresh(force = true) } },
+            { cleanMonths = 0 },
+        )
+    }
     if (sbOpen) SponsorDialog { sbOpen = false }
     if (errorOpen) Dialog(onDismissRequest = { errorOpen = false }) {
         Column(Modifier.width(620.dp).background(C.Panel, RoundedCornerShape(18.dp)).verticalScroll(rememberScrollState()).padding(20.dp)) {
@@ -441,8 +457,19 @@ fun ConnectScreen() {
     val addr = remember { Remote.address() }
     val devices = if (tick >= 0) Store.devices else emptyList()
     val status = remember { androidx.compose.runtime.mutableStateMapOf<String, String>() }
+    var scanning by remember { mutableStateOf(false) }
+    var found by remember { mutableStateOf<Map<String, org.json.JSONObject>>(emptyMap()) }
     LaunchedEffect(devices.size) {
-        devices.forEach { d -> status[d.host] = "Buscando…"; status[d.host] = if (Remote.ping(d.host)) "En línea" else "No responde" }
+        devices.forEach { d ->
+            status[d.host] = "Buscando…"
+            status[d.host] = if (Remote.ping(d.host)) "En línea"
+            else if (Remote.rediscover(d.host) != null) "Cambió de dirección: ya la encontré" else "No responde"
+        }
+    }
+    fun scanNet() {
+        if (scanning) return
+        scanning = true
+        scope.launch { found = Remote.scan().filterKeys { k -> devices.none { it.host == k } }; scanning = false; if (found.isEmpty()) Toast.show("No encontré otros aparatos con Vista abierta en este Wi-Fi") }
     }
 
     val receive: @Composable () -> Unit = {
@@ -470,10 +497,7 @@ fun ConnectScreen() {
     }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            ActionButton("", { nav.back() }, icon = Icons.AutoMirrored.Filled.ArrowBack)
-            PhoneTopBar("Otros aparatos")
-        }
+        PhoneTopBar("Otros aparatos")
         // Aparatos conectados desde aquí
         Text("CONECTADOS", color = C.Accent, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 6.dp, top = 6.dp))
         if (devices.isEmpty()) {
@@ -488,12 +512,28 @@ fun ConnectScreen() {
                         Text(d.host + "  ·  " + (status[d.host] ?: ""), color = if (status[d.host] == "En línea") C.Good else C.Low, fontSize = 12.sp)
                     }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (d.tv) ActionButton("Controlar", { Store.addDevice(d); nav.go(Route.RemoteTv) }, icon = Icons.Filled.Cast, primary = true)
                     ActionButton("Pasar mi cuenta", {
                         scope.launch { Toast.show(if (Remote.sendAccount(d.host)) "Listo: tu cuenta ya está en ${d.name}" else "No encontré ${d.name}. ¿Está prendido con Vista abierta?") }
-                    }, primary = true)
+                    }, primary = !d.tv)
                     ActionButton("Olvidar", { Store.removeDevice(d.host) })
                 }
+            }
+        }
+        // Buscar sin escanear códigos
+        ActionButton(if (scanning) "Buscando en tu Wi-Fi…" else "Buscar teles y aparatos en mi Wi-Fi", { scanNet() }, icon = Icons.Filled.Search)
+        found.forEach { (host, o) ->
+            val name = o.optString("nombre", "Aparato")
+            Row(Modifier.fillMaxWidth().background(C.Panel, RoundedCornerShape(16.dp)).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(name, color = C.Hi, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Text(host, color = C.Low, fontSize = 12.sp)
+                }
+                ActionButton("Conectar", {
+                    val d = Store.Device(host, name, o.optBoolean("tv", true))
+                    Store.addDevice(d); found = found - host; linkedDevice.value = d
+                }, primary = true)
             }
         }
         Spacer(Modifier.height(10.dp))

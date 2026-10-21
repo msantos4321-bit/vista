@@ -137,6 +137,7 @@ fun SearchScreen(initial: String) {
         item(span = { GridItemSpan(cols) }) {
             Column(Modifier.padding(horizontal = if (tv) 0.dp else 12.dp, vertical = if (tv) 0.dp else 10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (!tv) { ActionButton("", { nav.back() }, icon = androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack); Spacer(Modifier.width(6.dp)) }
                     TvTextField(
                         text, { text = it }, "Buscar videos y canales",
                         Modifier.weight(1f), onImeAction = { run(text) }, leading = Icons.Filled.Search,

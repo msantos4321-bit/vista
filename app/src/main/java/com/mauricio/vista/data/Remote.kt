@@ -29,7 +29,7 @@ object Remote {
     const val PORT = 8723
 
     sealed interface Cmd {
-        data class Play(val url: String) : Cmd
+        data class Play(val url: String, val startMs: Long = -1) : Cmd
         data class Search(val q: String) : Cmd
         data class Imported(val added: Int, val total: Int) : Cmd
         data class Account(val summary: String) : Cmd
@@ -37,6 +37,15 @@ object Remote {
 
     /** Lo pone la actividad al arrancar. */
     var isTv = false
+
+    /** Lo conecta el reproductor de este aparato: estado actual (para el control desde el celular). Corre en el hilo principal. */
+    @Volatile var nowPlaying: (() -> JSONObject)? = null
+    /** Lo conecta el reproductor: ejecuta una orden («toggle», «seek», «seekto», «next», «live», «stop»…). Corre en el hilo principal. */
+    @Volatile var onControl: ((JSONObject) -> Boolean)? = null
+
+    private fun <T> onMain(block: () -> T): T? = runCatching {
+        runBlocking { withContext(Dispatchers.Main) { block() } }
+    }.getOrNull()
 
     /** Nombre amable de este aparato («Tele Sala», «Tableta Samsung»…). */
     fun deviceName(): String {
@@ -112,8 +121,12 @@ object Remote {
                 Triple(if (r.isSuccess) 200 else 400, "application/json", JSONObject().put("ok", r.isSuccess).put("resumen", r.getOrNull() ?: "").toString().toByteArray())
             }
             method == "POST" && path == "/ver" -> {
-                val url = Yt.findLink(String(body)) ?: Yt.videoId(String(body).trim())?.let { Yt.watchUrl(it) }
-                if (url != null) { _cmds.tryEmit(Cmd.Play(url)); Triple(200, "application/json", """{"ok":true}""".toByteArray()) }
+                val raw = String(body, Charsets.UTF_8).trim()
+                // Puede llegar la liga sola o {"url":…, "t": milisegundos} para seguir donde iba el celular
+                val js = if (raw.startsWith("{")) runCatching { JSONObject(raw) }.getOrNull() else null
+                val txt = js?.optString("url") ?: raw
+                val url = Yt.findLink(txt) ?: Yt.videoId(txt)?.let { Yt.watchUrl(it) }
+                if (url != null) { _cmds.tryEmit(Cmd.Play(url, js?.optLong("t", -1) ?: -1)); Triple(200, "application/json", """{"ok":true}""".toByteArray()) }
                 else Triple(400, "application/json", """{"ok":false,"error":"No encontré una liga de YouTube"}""".toByteArray())
             }
             method == "POST" && path == "/buscar" -> {
@@ -125,6 +138,36 @@ object Remote {
                 val r = runBlocking { importBytes(body) }
                 _cmds.tryEmit(Cmd.Imported(r.first, r.second))
                 Triple(200, "application/json", JSONObject().put("ok", true).put("nuevos", r.first).put("total", r.second).toString().toByteArray())
+            }
+            // ---- Control remoto: lo que se está viendo, órdenes y la cola ----
+            method == "GET" && path == "/ahora" -> {
+                val o = onMain { nowPlaying?.invoke() } ?: JSONObject()
+                val q = JSONArray(); Queue.items.value.take(60).forEach { q.put(it.toJson()) }
+                o.put("ok", true).put("nombre", deviceName()).put("cola", q).put("repetir", Queue.repeat.value)
+                Triple(200, "application/json", o.toString().toByteArray())
+            }
+            method == "POST" && path == "/control" -> {
+                val o = runCatching { JSONObject(String(body, Charsets.UTF_8)) }.getOrNull()
+                val ok = o != null && (onMain { onControl?.invoke(o) } ?: false)
+                Triple(200, "application/json", JSONObject().put("ok", ok).toString().toByteArray())
+            }
+            method == "POST" && path == "/cola" -> {
+                val o = runCatching { JSONObject(String(body, Charsets.UTF_8)) }.getOrNull() ?: JSONObject()
+                val v = o.optJSONObject("video")?.let { Video.fromJson(it) }?.takeIf { it.url.isNotBlank() }
+                val ok = onMain {
+                    when (o.optString("a")) {
+                        "add" -> { v?.let { Queue.add(it) }; v != null }
+                        "next" -> { v?.let { Queue.playNext(it) }; v != null }
+                        "remove" -> { Queue.remove(o.optString("id")); true }
+                        "up" -> { Queue.move(o.optString("id"), -1); true }
+                        "down" -> { Queue.move(o.optString("id"), 1); true }
+                        "clear" -> { Queue.clear(); true }
+                        "shuffle" -> { Queue.shuffle(); true }
+                        "repeat" -> { Queue.cycleRepeat(); true }
+                        else -> false
+                    }
+                } ?: false
+                Triple(200, "application/json", JSONObject().put("ok", ok).toString().toByteArray())
             }
             method == "OPTIONS" -> Triple(204, "text/plain", ByteArray(0))
             else -> Triple(404, "text/plain", "No existe".toByteArray())
@@ -229,14 +272,93 @@ object Remote {
     // ------------------------------------------------------------------
     private val http by lazy { Net.client.newBuilder().connectTimeout(4, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS).build() }
 
-    private suspend fun post(path: String, body: ByteArray, type: String, to: String = Store.tvAddress): Boolean = withContext(Dispatchers.IO) {
-        val host = to.ifBlank { return@withContext false }
-        runCatching {
-            http.newCall(Request.Builder().url("http://$host$path").post(body.toRequestBody(type.toMediaType())).build()).execute().use { it.isSuccessful }
-        }.getOrDefault(false)
+    private val quick by lazy { Net.client.newBuilder().connectTimeout(2500, TimeUnit.MILLISECONDS).readTimeout(6, TimeUnit.SECONDS).build() }
+
+    private fun postOnce(host: String, path: String, body: ByteArray, type: String, client: okhttp3.OkHttpClient = http): String? = runCatching {
+        client.newCall(Request.Builder().url("http://$host$path").post(body.toRequestBody(type.toMediaType())).build()).execute().use { r ->
+            if (r.isSuccessful) r.body?.string().orEmpty() else null
+        }
+    }.getOrNull()
+
+    /**
+     * Manda algo a la tele. Si no contesta (la tele cambió de dirección en el Wi-Fi, que pasa seguido),
+     * la busca en la red de la casa, guarda su nueva dirección y vuelve a intentar.
+     */
+    private suspend fun post(path: String, body: ByteArray, type: String, to: String = Store.tvAddress): Boolean = postText(path, body, type, to) != null
+
+    private suspend fun postText(path: String, body: ByteArray, type: String, to: String = Store.tvAddress, fast: Boolean = false): String? = withContext(Dispatchers.IO) {
+        val host = to.ifBlank { return@withContext null }
+        postOnce(host, path, body, type, if (fast) quick else http)?.let { return@withContext it }
+        val moved = rediscover(host) ?: return@withContext null
+        postOnce(moved, path, body, type, if (fast) quick else http)
     }
 
-    suspend fun sendPlay(url: String) = post("/ver", url.toByteArray(), "text/plain")
+    private suspend fun getText(path: String, to: String = Store.tvAddress): String? = withContext(Dispatchers.IO) {
+        val host = to.ifBlank { return@withContext null }
+        fun once(h: String) = runCatching {
+            quick.newCall(Request.Builder().url("http://$h$path").build()).execute().use { r -> if (r.isSuccessful) r.body?.string() else null }
+        }.getOrNull()
+        once(host) ?: rediscover(host)?.let { once(it) }
+    }
+
+    private var lastScan = 0L
+
+    /** Todos los aparatos con Vista abierta en la red de la casa (dirección → datos de /estado). */
+    suspend fun scan(): Map<String, JSONObject> = withContext(Dispatchers.IO) {
+        val my = localIp() ?: return@withContext emptyMap()
+        val prefix = my.substringBeforeLast('.') + "."
+        val probe = Net.client.newBuilder().connectTimeout(700, TimeUnit.MILLISECONDS).readTimeout(1200, TimeUnit.MILLISECONDS).build()
+        val found = java.util.concurrent.ConcurrentHashMap<String, JSONObject>()
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(48)
+        try {
+            (1..254).map { "$prefix$it" }.filter { it != my }.map { ip ->
+                pool.submit {
+                    runCatching {
+                        probe.newCall(Request.Builder().url("http://$ip:$PORT/estado").build()).execute().use { r ->
+                            val t = r.body?.string().orEmpty()
+                            if (r.isSuccessful && t.contains("Vista")) found["$ip:$PORT"] = JSONObject(t)
+                        }
+                    }
+                }
+            }.forEach { runCatching { it.get(4, TimeUnit.SECONDS) } }
+        } finally { pool.shutdownNow() }
+        found
+    }
+
+    /** Busca en la red de la casa el aparato que antes estaba en [oldHost]. Devuelve su nueva dirección. */
+    suspend fun rediscover(oldHost: String): String? = withContext(Dispatchers.IO) {
+        if (System.currentTimeMillis() - lastScan < 20_000) return@withContext null
+        lastScan = System.currentTimeMillis()
+        val dev = Store.devices.firstOrNull { it.host == oldHost }
+        val found = scan()
+        if (found.isEmpty()) return@withContext null
+        // El mismo aparato (por nombre); si no, la única tele que haya
+        val pick = found.entries.firstOrNull { dev != null && it.value.optString("nombre") == dev.name }
+            ?: found.entries.filter { it.value.optBoolean("tv") == (dev?.tv ?: true) }.singleOrNull()
+            ?: return@withContext null
+        val newHost = pick.key
+        if (newHost != oldHost) {
+            Store.removeDevice(oldHost)
+            Store.addDevice(Store.Device(newHost, pick.value.optString("nombre", dev?.name.orEmpty()), pick.value.optBoolean("tv", dev?.tv ?: true)))
+        }
+        newHost
+    }
+
+    /** Manda un video a la tele; con [startMs] sigue en el mismo punto. */
+    suspend fun sendPlay(url: String, startMs: Long = -1) =
+        post("/ver", JSONObject().put("url", url).put("t", startMs).toString().toByteArray(), "application/json")
+
+    // ---- Control remoto de la tele ----
+    /** Lo que está viendo la tele (o null si no contesta). */
+    suspend fun now(): JSONObject? = getText("/ahora")?.let { runCatching { JSONObject(it) }.getOrNull() }
+
+    suspend fun control(a: String, v: Long = 0): Boolean =
+        postText("/control", JSONObject().put("a", a).put("v", v).toString().toByteArray(), "application/json", fast = true)
+            ?.let { runCatching { JSONObject(it).optBoolean("ok") }.getOrDefault(false) } ?: false
+
+    suspend fun queue(a: String, video: Video? = null, id: String = ""): Boolean =
+        postText("/cola", JSONObject().put("a", a).put("id", id).apply { video?.let { put("video", it.toJson()) } }.toString().toByteArray(), "application/json", fast = true)
+            ?.let { runCatching { JSONObject(it).optBoolean("ok") }.getOrDefault(false) } ?: false
     suspend fun sendSearch(q: String) = post("/buscar", q.toByteArray(), "text/plain")
     suspend fun sendSubs() = post("/importar", exportJson().toByteArray(), "application/json")
     /** Pasa la cuenta completa (suscripciones, temas, «Ver después», historial y ajustes). */
@@ -265,11 +387,14 @@ input,textarea{width:100%;background:var(--p2);color:var(--hi);border:1px solid 
 textarea{min-height:90px}
 button,.btn{display:inline-block;margin-top:10px;width:100%;border:0;border-radius:12px;padding:13px;font:600 16px inherit;color:#0E1A2B;background:linear-gradient(135deg,var(--ac),var(--ac2));text-align:center;text-decoration:none}
 .msg{margin-top:8px;font-size:14px;color:var(--mid);min-height:1em}
+.row{display:flex;gap:8px}.row button{flex:1;font-size:20px}
 .logo{display:inline-grid;place-items:center;width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,var(--ac),var(--ac2));font-size:22px;vertical-align:middle;margin-right:8px;color:#0E1A2B}
 </style></head><body>
 <h1><span class="logo">▶</span>Vista</h1><p class="sub">Control de ${deviceName()} desde tu celular</p>
 <div class="card"><h2>Pasar mi cuenta / conectar mi app</h2><p>Si ya tienes Vista en este celular, toca aquí: queda conectado y te ofrece pasar tu cuenta completa (suscripciones, temas, «Ver después» e historial) a ${deviceName()}.</p>
 <a class="btn" href="vista://tele?h=$host&n=${java.net.URLEncoder.encode(deviceName(), "UTF-8")}&tv=${if (isTv) 1 else 0}">Conectar mi app Vista</a></div>
+<div class="card"><h2>Control</h2><p id="np">Revisando qué se está viendo…</p>
+<div class="row"><button onclick="c('seek',-10000)">⟲ 10</button><button onclick="c('toggle')">⏯</button><button onclick="c('seek',10000)">10 ⟳</button><button onclick="c('next')">⏭</button></div></div>
 <div class="card"><h2>Mandar un video aquí</h2><p>Pega una liga de YouTube (también puedes compartirla desde la app de YouTube y copiarla).</p>
 <input id="u" placeholder="https://youtu.be/…"><button onclick="send('/ver',u.value,'m1')">Ver en ${deviceName()}</button><div class="msg" id="m1"></div></div>
 <div class="card"><h2>Buscar</h2><p>Escribe aquí en lugar de usar el control.</p>
@@ -280,6 +405,9 @@ button,.btn{display:inline-block;margin-top:10px;width:100%;border:0;border-radi
 <p class="sub" style="text-align:center"><a href="/error" style="color:var(--low)">Ver el último error de este aparato</a></p>
 <script>
 async function send(p,b,m){const e=document.getElementById(m);e.textContent='Enviando…';try{const r=await fetch(p,{method:'POST',body:b});const j=await r.json();e.textContent=j.ok?(j.nuevos!==undefined?('Listo: '+j.nuevos+' canales nuevos de '+j.total+'.'):'¡Listo!'):(j.error||'No se pudo');}catch(x){e.textContent='No se pudo conectar. Revisa que Vista esté abierta en el otro aparato.';}}
+async function c(a,v){try{await fetch('/control',{method:'POST',body:JSON.stringify({a:a,v:v||0})});st();}catch(x){}}
+async function st(){try{const j=await (await fetch('/ahora')).json();np.textContent=j.video?((j.playing?'▶ ':'⏸ ')+j.video.t):'No se está reproduciendo nada.';}catch(x){np.textContent='Sin conexión con el aparato.';}}
+st();setInterval(st,3000);
 async function up(){const fl=f.files[0];if(!fl){m3.textContent='Elige primero el archivo.';return;}m3.textContent='Subiendo y revisando canales… (puede tardar un minuto)';const b=await fl.arrayBuffer();send('/importar',b,'m3');}
 </script></body></html>"""
     }

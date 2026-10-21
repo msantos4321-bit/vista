@@ -68,6 +68,8 @@ sealed interface Route {
     data object Downloads : Route
     data object Settings : Route
     data object Connect : Route
+    /** Control de la tele desde el celular. */
+    data object RemoteTv : Route
     data class Channel(val url: String, val name: String = "") : Route
     /** Lista de reproducción de YouTube. */
     data class Playlist(val url: String, val name: String = "") : Route
@@ -153,7 +155,10 @@ fun App() {
     LaunchedEffect(Unit) {
         Remote.cmds.collect { c ->
             when (c) {
-                is Remote.Cmd.Play -> nav.play(Video(url = c.url, title = "Cargando…"))
+                is Remote.Cmd.Play -> {
+                    if (c.startMs > 0) com.mauricio.vista.data.Yt.videoId(c.url)?.let { PlayerState.castStart = it to c.startMs }
+                    nav.play(Video(url = c.url, title = "Cargando…"))
+                }
                 is Remote.Cmd.Search -> nav.go(Route.Search(c.q))
                 is Remote.Cmd.Imported -> Toast.show(if (c.added > 0) "Se agregaron ${c.added} canales a tus suscripciones" else "Esos canales ya estaban en tus suscripciones")
                 is Remote.Cmd.Account -> {
@@ -237,6 +242,7 @@ private fun Screen(top: Route) {
         Route.Downloads -> DownloadsScreen()
         Route.Settings -> SettingsScreen()
         Route.Connect -> ConnectScreen()
+        Route.RemoteTv -> RemoteTvScreen()
         is Route.Channel -> key(top) { ChannelScreen(top.url, top.name) }
         is Route.Playlist -> key(top) { YtPlaylistScreen(top.url, top.name) }
         is Route.MyList -> key(top) { MyListScreen(top.id) }
@@ -384,9 +390,12 @@ private fun PhoneShell(top: Route, miniPlayer: (@Composable () -> Unit)? = null)
 
 /** Título grande de pantalla en el celular. */
 @Composable
-fun PhoneTopBar(title: String, action: (@Composable () -> Unit)? = null) {
-    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(title, color = C.Hi, fontSize = 28.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+fun PhoneTopBar(title: String, back: Boolean = true, action: (@Composable () -> Unit)? = null) {
+    val nav = LocalNav.current
+    Row(Modifier.fillMaxWidth().padding(start = if (back) 2.dp else 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        // Botón de regresar en cada pantalla (además del gesto)
+        if (back) { ActionButton("", { nav.back() }, icon = androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack); Spacer(Modifier.width(4.dp)) }
+        Text(title, color = C.Hi, fontSize = if (back) 24.sp else 28.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), maxLines = 1)
         action?.invoke()
     }
 }

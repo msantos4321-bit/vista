@@ -35,6 +35,10 @@ object Feed {
     private val _state = MutableStateFlow<State>(State.Empty)
     val state: StateFlow<State> get() = _state
 
+    /** Último video de cada canal (clave del canal → milisegundos; 0 = no tiene videos). Solo de canales que contestaron. */
+    @Volatile var lastUpload: Map<String, Long> = emptyMap()
+        private set
+
     private lateinit var cache: File
     private var loadedAt = 0L
     private val lock = Mutex()
@@ -48,10 +52,18 @@ object Feed {
             val a = o.getJSONArray("v")
             _videos.value = List(a.length()) { Video.fromJson(a.getJSONObject(it)) }
             if (_videos.value.isNotEmpty()) _state.value = State.Ready
+            o.optJSONObject("last")?.let { l -> lastUpload = l.keys().asSequence().associateWith { k -> l.optLong(k) } }
         }
     }
 
     fun invalidate() { loadedAt = 0 }
+
+    /** Canales que llevan más de [months] meses sin subir nada (según la última revisión). */
+    fun inactive(months: Int): List<Chan> {
+        val cut = System.currentTimeMillis() - months * 30L * 86_400_000L
+        val l = lastUpload
+        return Store.subs.value.filter { c -> l[Store.channelKey(c.url)]?.let { it < cut } == true }
+    }
 
     /** Renueva si ya pasó el tiempo (o si se pide a fuerza). */
     suspend fun refresh(force: Boolean = false) { lock.withLock {
@@ -61,11 +73,14 @@ object Feed {
         _state.value = State.Loading(0, subs.size)
         var done = 0
         val sem = Semaphore(8)
+        val last = java.util.concurrent.ConcurrentHashMap<String, Long>()
         val all = coroutineScope {
             subs.map { ch ->
                 async(Net.background) {
                     sem.withPermit {
-                        val r = runCatching { channelFeed(ch) }.getOrDefault(emptyList())
+                        val got = runCatching { channelFeed(ch) }
+                        got.getOrNull()?.let { l -> last[Store.channelKey(ch.url)] = l.maxOfOrNull { it.publishedMs } ?: 0L }
+                        val r = got.getOrDefault(emptyList())
                         synchronized(this@Feed) { done++; if (done % 6 == 0 || done == subs.size) _state.value = State.Loading(done, subs.size) }
                         r
                     }
@@ -75,11 +90,13 @@ object Feed {
         val sorted = all.distinctBy { it.id }.sortedByDescending { it.publishedMs }.take(300)
         if (sorted.isNotEmpty() || _videos.value.isEmpty()) _videos.value = sorted
         loadedAt = System.currentTimeMillis()
+        if (last.isNotEmpty()) lastUpload = lastUpload + last
         _state.value = if (_videos.value.isEmpty()) State.Empty else State.Ready
         withContext(Dispatchers.IO) {
             runCatching {
                 val a = JSONArray(); _videos.value.forEach { a.put(it.toJson()) }
-                cache.writeText(JSONObject().put("at", loadedAt).put("v", a).toString())
+                val l = JSONObject(); lastUpload.forEach { (k, v) -> l.put(k, v) }
+                cache.writeText(JSONObject().put("at", loadedAt).put("v", a).put("last", l).toString())
             }
         }
     } }

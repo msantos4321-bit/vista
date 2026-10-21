@@ -210,6 +210,38 @@ object Recs {
             }
     }
 
+    /**
+     * «Recomendados de tus suscripciones»: lo nuevo de tus canales ordenado por lo que más ves de cada uno
+     * y qué tan reciente es; sin lo que ya viste ni lo que dijiste que no te interesa.
+     */
+    fun fromSubs(feed: List<Video>): List<Video> {
+        val hist = Store.history.value
+        val seen = hist.filter { it.finished || it.progress > 0.5f }.map { it.video.id }.toHashSet()
+        val chanWeight = HashMap<String, Double>()
+        hist.take(200).forEach { w -> if (w.video.channelUrl.isNotBlank()) chanWeight.add(Store.channelKey(w.video.channelUrl), w.progress.toDouble() + 0.2) }
+        val maxChan = chanWeight.values.maxOrNull() ?: 1.0
+        val now = System.currentTimeMillis()
+        val ranked = feed.asSequence()
+            .filter { it.id !in seen && it.id !in Store.hiddenVideos && !Store.isBlocked(it.channelUrl) && !(Store.hideShorts && it.short) }
+            .map { v ->
+                val aff = (chanWeight[Store.channelKey(v.channelUrl)] ?: 0.0) / maxChan
+                val ageDays = if (v.publishedMs > 0) ((now - v.publishedMs) / 86_400_000.0).coerceAtLeast(0.0) else 7.0
+                v to (0.15 + aff) * Math.exp(-ageDays / 10.0)
+            }
+            .sortedByDescending { it.second }
+        val perChannel = HashMap<String, Int>()
+        val out = ArrayList<Video>()
+        for ((v, _) in ranked) {
+            val k = Store.channelKey(v.channelUrl)
+            val n = perChannel[k] ?: 0
+            if (n >= 3) continue
+            perChannel[k] = n + 1
+            out += v
+            if (out.size >= 80) break
+        }
+        return out
+    }
+
     private fun <K, V> HashMap<K, V>.putIfMissing(k: K, v: V) { if (!containsKey(k)) this[k] = v }
     private fun <K> HashMap<K, Double>.add(k: K, v: Double) { this[k] = (this[k] ?: 0.0) + v }
 
