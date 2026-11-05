@@ -2,7 +2,8 @@ name: Compilar APK
 
 on:
   push:
-    branches: [main]
+    # main publica versión para todos; trabajo/** solo comprueba que compile (no le llega a nadie)
+    branches: [main, 'trabajo/**']
     paths-ignore:
       - '**.md'
       - 'docs/**'
@@ -12,7 +13,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: build
+  group: build-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -43,6 +44,7 @@ jobs:
 
       - name: Firmar APK
         id: firma
+        if: github.ref == 'refs/heads/main'
         env:
           FIRMA: ${{ secrets.VISTA_FIRMA }}
         run: |

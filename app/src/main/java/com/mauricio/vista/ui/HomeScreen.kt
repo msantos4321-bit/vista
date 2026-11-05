@@ -113,6 +113,18 @@ private data class HomeRow(
     val chans: List<Recs.Suggested> = emptyList(),
 )
 
+/** Lo popular de tus temas y de las tendencias, intercalado (un poco de cada uno). */
+private fun generalMix(topics: List<String>, topicRows: Map<String, List<Video>>, kiosk: Map<String, List<Video>>): List<Video> {
+    val lists = topics.map { topicRows[it].orEmpty() } + HomeData.kiosks.map { kiosk[it.first].orEmpty() }
+    val out = ArrayList<Video>(); val ids = HashSet<String>()
+    var i = 0
+    while (out.size < 80 && lists.any { i < it.size }) {
+        lists.forEach { l -> l.getOrNull(i)?.let { if (ids.add(it.id)) out += it } }
+        i++
+    }
+    return out.clean()
+}
+
 @Composable
 private fun buildRows(): List<HomeRow> {
     val feed by Feed.videos.collectAsState()
@@ -122,18 +134,30 @@ private fun buildRows(): List<HomeRow> {
     val chans by Recs.channels.collectAsState()
     val topics by Recs.topicRows.collectAsState()
     val tick by Store.settingsTick.collectAsState()
-    val out = ArrayList<HomeRow>()
-    if (tick < -1) return out
-    val cont = history.filter { !it.finished && it.posMs > 15_000 }.take(20)
-    if (cont.isNotEmpty()) out += HomeRow("cont", "Continuar viendo", cont.map { it.video }, cont.associate { it.video.id to it.progress })
-    if (forYou.isNotEmpty()) out += HomeRow("foryou", "Para ti", forYou.take(30))
-    // Lo de tus canales vive en «Suscripciones»; aquí va lo recomendado en general
-    if (forYou.isEmpty()) feed.clean().takeIf { it.isNotEmpty() }?.let { out += HomeRow("feed", "Nuevos de tus suscripciones", it.take(30)) }
-    if (chans.isNotEmpty()) out += HomeRow("chans", "Canales que quizá te gusten", emptyList(), chans = chans)
-    Store.topics.forEach { t -> topics[t]?.clean()?.takeIf { it.isNotEmpty() }?.let { out += HomeRow("t:$t", t, it) } }
-    if (later.isNotEmpty()) out += HomeRow("later", "Ver después", later.take(30))
-    if (!com.mauricio.vista.data.Profiles.isKids) HomeData.kiosks.forEach { (id, title) -> HomeData.rows[id]?.clean()?.takeIf { it.isNotEmpty() }?.let { out += HomeRow(id, title, it.take(30)) } }
-    return out
+    val kiosk = HomeData.rows.toMap()
+    val kids = com.mauricio.vista.data.Profiles.isKids
+    // Se arma solo cuando cambian los datos (antes se rearmaba cada vez que se movía el control)
+    return remember(feed, history, later, forYou, chans, topics, tick, kiosk) {
+        val out = ArrayList<HomeRow>()
+        val cont = history.filter { !it.finished && it.posMs > 15_000 }.take(20)
+        if (cont.isNotEmpty()) out += HomeRow("cont", "Continuar viendo", cont.map { it.video }, cont.associate { it.video.id to it.progress })
+        val subsRec = Recs.fromSubs(feed, 40)
+        val general = if (kids) emptyList() else generalMix(Store.topics, topics, kiosk)
+        val mix = Recs.homeMix(forYou.clean(), subsRec, general, 40)
+        if (mix.isNotEmpty()) out += HomeRow("foryou", "Para ti", mix)
+        if (subsRec.isNotEmpty()) out += HomeRow("subs", "De tus canales", subsRec.take(30))
+        if (chans.isNotEmpty()) out += HomeRow("chans", "Canales que quizá te gusten", emptyList(), chans = chans)
+        Store.topics.forEach { t -> topics[t]?.clean()?.takeIf { it.isNotEmpty() }?.let { out += HomeRow("t:$t", t, it) } }
+        if (later.isNotEmpty()) out += HomeRow("later", "Ver después", later.take(30))
+        if (!kids) HomeData.kiosks.forEach { (id, title) -> kiosk[id]?.clean()?.takeIf { it.isNotEmpty() }?.let { out += HomeRow(id, title, it.take(30)) } }
+        out
+    }
+}
+
+/** Lo que tiene el foco en Inicio de la tele. Vive aparte para que moverse no rearme toda la pantalla. */
+private class HeroState {
+    var focused by mutableStateOf<Video?>(null)
+    var shown by mutableStateOf<Video?>(null)
 }
 
 @Composable
@@ -141,45 +165,14 @@ private fun TvHome() {
     val nav = LocalNav.current
     val rows = buildRows()
     val mem = remember { nav.memory("home") }
-    var hero by remember { mutableStateOf<Video?>(null) }
-    var focusedV by remember { mutableStateOf<Video?>(null) }
-    // La portada cambia cuando el control se detiene un momento (si no, cada movimiento cargaba una imagen grande)
-    LaunchedEffect(focusedV) {
-        val v = focusedV ?: return@LaunchedEffect
-        kotlinx.coroutines.delay(320)
-        hero = v
-        // Si se queda ahí, se va preparando el video para que arranque al instante
-        kotlinx.coroutines.delay(900)
-        Yt.prefetch(v.url)
-    }
+    val hero = remember { HeroState() }
     val first = remember { FocusRequester() }
-    val shown = hero ?: rows.firstOrNull()?.videos?.firstOrNull()
+    val fallback = rows.firstOrNull()?.videos?.firstOrNull()
 
     Box(Modifier.fillMaxSize()) {
-        // Fondo: la imagen del video enfocado, difuminada hacia los lados
-        Crossfade(shown?.id, animationSpec = tween(250), label = "hero") { id ->
-            val v = rows.asSequence().flatMap { it.videos }.firstOrNull { it.id == id } ?: shown
-            if (v != null) Box(Modifier.fillMaxWidth().height(330.dp)) {
-                Img(v.thumbMax, Modifier.fillMaxSize(), fallback = v.thumbHq)
-                Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(0f to C.Bg, 0.42f to C.Bg.copy(alpha = 0.75f), 1f to Color.Transparent)))
-                Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.35f to Color.Transparent, 1f to C.Bg)))
-            }
-        }
+        HeroBackground(hero, fallback)
         Column(Modifier.fillMaxSize()) {
-            // Datos del video enfocado
-            Column(Modifier.fillMaxWidth().height(232.dp).padding(start = 28.dp, end = 300.dp, top = 40.dp)) {
-                if (shown == null) {
-                    Text("Vista", color = C.Hi, fontSize = 34.sp, fontWeight = FontWeight.Bold)
-                    Text("Cargando lo nuevo…", color = C.Mid, fontSize = 15.sp)
-                } else {
-                    Text(shown.channel.uppercase(), color = C.Accent, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                    Spacer(Modifier.height(6.dp))
-                    Text(shown.title, color = C.Hi, fontSize = 28.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 33.sp)
-                    Spacer(Modifier.height(8.dp))
-                    val meta = listOf(Fmt.duration(shown.duration), Fmt.meta(shown, withChannel = false)).filter { it.isNotBlank() }.joinToString("  ·  ")
-                    Text(meta, color = C.Mid, fontSize = 14.sp, maxLines = 1)
-                }
-            }
+            HeroInfo(hero, fallback)
             if (rows.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Spinner() }
             } else {
@@ -193,14 +186,14 @@ private fun TvHome() {
                             Text(r.title, color = C.Hi, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 28.dp, bottom = 10.dp))
                             LazyRow(contentPadding = PaddingValues(horizontal = 28.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                                 itemsIndexed(r.chans, key = { _, c -> "c" + c.chan.url }) { _, c ->
-                                    SuggestedChannelCard(c, 220.dp, Modifier.rememberFocus(mem, "${r.key}:${c.chan.url}"), onFocused = { focusedV = c.sample })
+                                    SuggestedChannelCard(c, 220.dp, Modifier.rememberFocus(mem, "${r.key}:${c.chan.url}"), onFocused = { hero.focused = c.sample })
                                 }
                                 itemsIndexed(r.videos, key = { _, v -> v.id }) { i, v ->
                                     VideoCard(
                                         v, onClick = { nav.play(v, r.videos.drop(i + 1)) },
                                         modifier = Modifier.rememberFocus(mem, "${r.key}:${v.id}").then(if (ri == 0 && i == 0) Modifier.focusRequester(first) else Modifier),
                                         width = 220.dp, progress = r.progress[v.id] ?: 0f,
-                                        onFocused = { focusedV = v },
+                                        onFocused = { hero.focused = v },
                                         onLongClick = { videoMenu.value = v },
                                     )
                                 }
@@ -212,6 +205,47 @@ private fun TvHome() {
         }
     }
     if (rows.isNotEmpty()) RestoreFocus(mem, first)
+}
+
+/** Fondo: la imagen del video enfocado, difuminada hacia los lados. */
+@Composable
+private fun HeroBackground(hero: HeroState, fallback: Video?) {
+    // La portada cambia cuando el control se detiene un momento (si no, cada movimiento cargaba una imagen grande)
+    LaunchedEffect(hero.focused) {
+        val v = hero.focused ?: return@LaunchedEffect
+        kotlinx.coroutines.delay(320)
+        hero.shown = v
+        // Si se queda ahí, se va preparando el video para que arranque al instante
+        kotlinx.coroutines.delay(900)
+        Yt.prefetch(v.url)
+    }
+    val v = hero.shown ?: fallback
+    Crossfade(v, animationSpec = tween(250), label = "hero") { cur ->
+        if (cur != null) Box(Modifier.fillMaxWidth().height(330.dp)) {
+            Img(cur.thumbMax, Modifier.fillMaxSize(), fallback = cur.thumbHq)
+            Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(0f to C.Bg, 0.42f to C.Bg.copy(alpha = 0.75f), 1f to Color.Transparent)))
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.35f to Color.Transparent, 1f to C.Bg)))
+        }
+    }
+}
+
+/** Datos del video enfocado. */
+@Composable
+private fun HeroInfo(hero: HeroState, fallback: Video?) {
+    val shown = hero.shown ?: fallback
+    Column(Modifier.fillMaxWidth().height(232.dp).padding(start = 28.dp, end = 300.dp, top = 40.dp)) {
+        if (shown == null) {
+            Text("Vista", color = C.Hi, fontSize = 34.sp, fontWeight = FontWeight.Bold)
+            Text("Cargando lo nuevo…", color = C.Mid, fontSize = 15.sp)
+        } else {
+            Text(shown.channel.uppercase(), color = C.Accent, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+            Spacer(Modifier.height(6.dp))
+            Text(shown.title, color = C.Hi, fontSize = 28.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 33.sp)
+            Spacer(Modifier.height(8.dp))
+            val meta = listOf(Fmt.duration(durationOf(shown)), Fmt.meta(shown, withChannel = false)).filter { it.isNotBlank() }.joinToString("  ·  ")
+            Text(meta, color = C.Mid, fontSize = 14.sp, maxLines = 1)
+        }
+    }
 }
 
 // ======================================================================
@@ -234,17 +268,12 @@ private fun PhoneHome() {
         topics.map { "t:$it" to it } +
         (if (com.mauricio.vista.data.Profiles.isKids) emptyList() else HomeData.kiosks.map { it.first to it.second.substringBefore(" de ").replace("Tendencias en música", "Música") })
     val cont = history.filter { !it.finished && it.posMs > 15_000 }.take(15)
-    // «Para ti»: recomendaciones con lo popular de tus temas intercalado (2 y 1); sin historial, lo nuevo de tus canales
-    val mixed = remember(forYou, feed, topicRows) {
-        val general = (topics.flatMap { topicRows[it].orEmpty() } + HomeData.kiosks.flatMap { HomeData.rows[it.first].orEmpty() }).clean().shuffled(java.util.Random(forYou.size.toLong())).take(60)
-        val a = forYou.clean().ifEmpty { feed.clean().take(30) }; val b = general
-        val out = ArrayList<Video>(); val seen = HashSet<String>()
-        var i = 0; var j = 0
-        while (i < a.size || j < b.size) {
-            repeat(2) { if (i < a.size) { val v = a[i++]; if (seen.add(v.id)) out += v } }
-            if (j < b.size) { val v = b[j++]; if (seen.add(v.id)) out += v }
-        }
-        out
+    // «Para ti»: como YouTube, mezcla lo parecido a lo que ves, lo mejor de tus canales y lo popular de tus temas
+    val kiosk = HomeData.rows.toMap()
+    val lastWatched = history.firstOrNull()?.video?.id
+    val mixed = remember(forYou, feed, topicRows, kiosk, lastWatched, tick) {
+        val general = if (com.mauricio.vista.data.Profiles.isKids) emptyList() else generalMix(topics, topicRows, kiosk)
+        Recs.homeMix(forYou.clean(), Recs.fromSubs(feed, 50), general)
     }
     val list = when {
         tab == "foryou" -> mixed

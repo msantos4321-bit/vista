@@ -201,9 +201,11 @@ fun PlayerScreen(start: Video, queue: List<Video>, startAudioOnly: Boolean, mini
                         return@onSuccess
                     }
                     ui.info = info
+                    com.mauricio.vista.data.Durations.learn(start.id, if (Sources.isLive(info)) -1 else info.duration)
                     ui.video = ui.video.copy(
                         title = info.name.orEmpty(), channel = info.uploaderName.orEmpty(), channelUrl = info.uploaderUrl.orEmpty(),
                         duration = info.duration, views = info.viewCount, uploaded = info.textualUploadDate.orEmpty(),
+                        publishedMs = ui.video.publishedMs.takeIf { it > 0 } ?: (runCatching { info.uploadDate?.offsetDateTime()?.toInstant()?.toEpochMilli() }.getOrNull() ?: 0L),
                         thumb = ui.video.thumb.ifBlank { Yt.bestImage(info.thumbnails, 480) }, live = Sources.isLive(info),
                     )
                     ui.related = Yt.related(info).let { r -> if (Store.hideShorts) r.filterNot { it.short } else r }
@@ -292,15 +294,16 @@ fun PlayerScreen(start: Video, queue: List<Video>, startAudioOnly: Boolean, mini
         }
         player.addListener(l)
         // El celular puede ver y manejar lo que se reproduce aquí (control remoto)
-        val hubState: () -> org.json.JSONObject = {
+        val hubState: (Boolean) -> org.json.JSONObject = { full ->
             val o = org.json.JSONObject()
             o.put("video", ui.video.toJson().put("id", ui.video.id).put("thumbHq", ui.video.thumbHq))
             o.put("pos", player.currentPosition).put("dur", ui.duration).put("playing", ui.isPlaying)
             o.put("buffering", ui.buffering || ui.loading).put("ended", ui.ended).put("live", ui.video.live)
             o.put("error", ui.error ?: "").put("audio", ui.audioOnly).put("speed", ui.speed.toDouble())
             ui.next?.let { o.put("next", it.toJson()) }
-            val rel = org.json.JSONArray(); ui.related.take(15).forEach { rel.put(it.toJson()) }
-            o.put("related", rel)
+            // Los recomendados pesan: solo cuando el celular los pide (al cambiar de video o de vez en cuando)
+            if (full) { val rel = org.json.JSONArray(); ui.related.take(15).forEach { rel.put(it.toJson()) }; o.put("related", rel) }
+            o
         }
         val hubControl: (org.json.JSONObject) -> Boolean = { c ->
             val v = c.optLong("v")
@@ -330,6 +333,8 @@ fun PlayerScreen(start: Video, queue: List<Video>, startAudioOnly: Boolean, mini
             PlayerState.active = false
             if (!tv) com.mauricio.vista.player.Media.release(ctx)
             com.mauricio.vista.data.Recs.playing = false
+            // Lo que acabas de ver cambia «Para ti» al instante (con lo que ya está guardado, sin bajar nada)
+            runCatching { com.mauricio.vista.data.Recs.compute() }
             PlayerState.playing = false
             DeviceUi.setPlaying(false)
         }

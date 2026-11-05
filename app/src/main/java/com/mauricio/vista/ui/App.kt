@@ -59,6 +59,7 @@ import com.mauricio.vista.data.Chan
 import com.mauricio.vista.data.Remote
 import com.mauricio.vista.data.Video
 import com.mauricio.vista.data.Yt
+import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.launch
 
 sealed interface Route {
@@ -76,7 +77,8 @@ sealed interface Route {
     data class Playlist(val url: String, val name: String = "") : Route
     /** Lista guardada por la persona. */
     data class MyList(val id: String) : Route
-    data class Player(val video: Video, val queue: List<Video> = emptyList(), val audioOnly: Boolean = false) : Route
+    /** [nonce]: cada vez que se pide un video es un pedido nuevo (aunque sea el mismo video que ya se ve). */
+    data class Player(val video: Video, val queue: List<Video> = emptyList(), val audioOnly: Boolean = false, val nonce: Long = System.nanoTime()) : Route
 }
 
 /** Acciones de navegación para todas las pantallas. */
@@ -154,7 +156,8 @@ fun App() {
 
     // Lo que llega desde el celular por la red de la casa
     LaunchedEffect(Unit) {
-        Remote.cmds.collect { c ->
+        // Primero lo que llegó cuando la pantalla estaba cerrada
+        Remote.cmds.onSubscription { Remote.takePending()?.let { emit(it) } }.collect { c ->
             when (c) {
                 is Remote.Cmd.Play -> {
                     if (c.startMs > 0) com.mauricio.vista.data.Yt.videoId(c.url)?.let { PlayerState.castStart = it to c.startMs }
@@ -209,7 +212,21 @@ fun App() {
     val profile by com.mauricio.vista.data.Profiles.current.collectAsState()
     LaunchedEffect(profile.id) { activePlayer.value = null; stack.clear(); stack.add(Route.Home); memories.clear() }
 
-    CompositionLocalProvider(LocalNav provides nav) {
+    // Novedades en automático mientras Vista está abierta (solo los canales que ya toca revisar)
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(1500)
+        while (true) {
+            if (Remote.foreground && !(DeviceUi.realTv && PlayerState.playing)) {
+                runCatching { com.mauricio.vista.data.Feed.refresh() }
+                runCatching { com.mauricio.vista.data.Durations.fill(com.mauricio.vista.data.Feed.videos.value, if (DeviceUi.realTv) 15 else 30) }
+            }
+            kotlinx.coroutines.delay(5 * 60_000L)
+        }
+    }
+    val progressMap by com.mauricio.vista.data.Store.progress.collectAsState()
+    val durationMap by com.mauricio.vista.data.Durations.all.collectAsState()
+
+    CompositionLocalProvider(LocalNav provides nav, LocalProgress provides progressMap, LocalDurations provides durationMap) {
         key(profile.id) { Box(Modifier.fillMaxSize().background(C.Bg)) {
             when {
                 recovering -> RecoveryScreen { recovering = false; com.mauricio.vista.data.Store.clearCrash() }

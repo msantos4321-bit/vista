@@ -19,6 +19,23 @@ object Store {
     private val _history = MutableStateFlow<List<Watched>>(emptyList())
     val history: StateFlow<List<Watched>> get() = _history
 
+    /** Cuánto llevas visto de cada video (id → 0..1; 1 = terminado): la barrita roja de todas las tarjetas. */
+    private val _progress = MutableStateFlow<Map<String, Float>>(emptyMap())
+    val progress: StateFlow<Map<String, Float>> get() = _progress
+
+    private fun setHistory(list: List<Watched>) {
+        _history.value = list
+        _progress.value = list.associate { w -> w.video.id to (if (w.finished) 1f else w.progress) }
+    }
+
+    /** Escritura del historial en segundo plano (antes se hacía cada 8 s en el hilo de la pantalla y trababa la tele). */
+    private val writer = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "vista-guardar").apply { priority = Thread.MIN_PRIORITY; isDaemon = true } }
+    private val histDirty = java.util.concurrent.atomic.AtomicBoolean(false)
+    private fun saveHistoryLater() {
+        if (histDirty.getAndSet(true)) return
+        writer.execute { histDirty.set(false); runCatching { writeArr("history", _history.value.map { it.toJson() }) } }
+    }
+
     private val _later = MutableStateFlow<List<Video>>(emptyList())
     val later: StateFlow<List<Video>> get() = _later
 
@@ -36,7 +53,7 @@ object Store {
         // Cada perfil guarda lo suyo; el perfil principal usa el archivo de siempre
         sp = ctx.getSharedPreferences(Profiles.prefsName(), Context.MODE_PRIVATE)
         _subs.value = readList("subs") { Chan.fromJson(it) }
-        _history.value = readList("history") { Watched.fromJson(it) }
+        setHistory(readList("history") { Watched.fromJson(it) })
         _later.value = readList("later") { Video.fromJson(it) }
         _searches.value = runCatching { JSONArray(sp.getString("searches", "[]")).let { a -> List(a.length()) { a.getString(it) } } }.getOrDefault(emptyList())
     }
@@ -58,37 +75,61 @@ object Store {
 
     private fun key(url: String) = Regex("(UC[\\w-]{22})").find(url)?.value ?: url.trimEnd('/').lowercase()
 
+    // Los cambios a la lista de canales van de uno en uno (antes dos hilos a la vez podían borrar lo del otro)
+    private val subsLock = Any()
+
     fun subscribe(c: Chan) {
-        if (isSubscribed(c.url)) return
-        _subs.value = (_subs.value + c).sortedBy { it.name.lowercase() }
-        writeArr("subs", _subs.value.map { it.toJson() })
+        synchronized(subsLock) {
+            if (isSubscribed(c.url)) return
+            _subs.value = (_subs.value + c).sortedBy { it.name.lowercase() }
+            writeArr("subs", _subs.value.map { it.toJson() })
+        }
         Feed.invalidate()
     }
 
     fun unsubscribe(url: String) {
         val k = key(url)
-        _subs.value = _subs.value.filterNot { key(it.url) == k }
-        writeArr("subs", _subs.value.map { it.toJson() })
+        synchronized(subsLock) {
+            _subs.value = _subs.value.filterNot { key(it.url) == k }
+            writeArr("subs", _subs.value.map { it.toJson() })
+        }
+        Feed.invalidate()
+    }
+
+    /** Cambia un canal guardado con liga «@nombre» por su forma /channel/UC… (sin perder nada). */
+    fun replaceChan(oldUrl: String, c: Chan) {
+        val k = key(oldUrl)
+        synchronized(subsLock) {
+            val rest = _subs.value.filterNot { key(it.url) == k || key(it.url) == key(c.url) }
+            _subs.value = (rest + c).sortedBy { it.name.lowercase() }
+            writeArr("subs", _subs.value.map { it.toJson() })
+        }
         Feed.invalidate()
     }
 
     /** Agrega muchas de golpe (al importar). Devuelve cuántas eran nuevas. */
     fun subscribeAll(list: List<Chan>): Int {
-        val have = _subs.value.map { key(it.url) }.toHashSet()
-        val nuevos = list.filter { have.add(key(it.url)) }
-        if (nuevos.isEmpty()) return 0
-        _subs.value = (_subs.value + nuevos).sortedBy { it.name.lowercase() }
-        writeArr("subs", _subs.value.map { it.toJson() })
-        Feed.invalidate()
-        return nuevos.size
+        val n = synchronized(subsLock) {
+            val have = _subs.value.map { key(it.url) }.toHashSet()
+            val nuevos = list.filter { have.add(key(it.url)) }
+            if (nuevos.isNotEmpty()) {
+                _subs.value = (_subs.value + nuevos).sortedBy { it.name.lowercase() }
+                writeArr("subs", _subs.value.map { it.toJson() })
+            }
+            nuevos.size
+        }
+        if (n > 0) Feed.invalidate()
+        return n
     }
 
     /** Actualiza foto o nombre de un canal guardado (cuando se visita). */
     fun refreshChan(c: Chan) {
         val k = key(c.url)
-        if (_subs.value.none { key(it.url) == k }) return
-        _subs.value = _subs.value.map { if (key(it.url) == k) it.copy(name = c.name.ifBlank { it.name }, avatar = c.avatar.ifBlank { it.avatar }, subs = c.subs) else it }
-        writeArr("subs", _subs.value.map { it.toJson() })
+        synchronized(subsLock) {
+            if (_subs.value.none { key(it.url) == k }) return
+            _subs.value = _subs.value.map { if (key(it.url) == k) it.copy(name = c.name.ifBlank { it.name }, avatar = c.avatar.ifBlank { it.avatar }, subs = c.subs) else it }
+            writeArr("subs", _subs.value.map { it.toJson() })
+        }
     }
 
     // ------------------------------------------------------------------
@@ -99,18 +140,18 @@ object Store {
     fun saveProgress(v: Video, posMs: Long, durMs: Long) {
         if (v.live) return
         val w = Watched(v, posMs, durMs, System.currentTimeMillis())
-        _history.value = (listOf(w) + _history.value.filterNot { it.video.id == v.id }).take(400)
-        writeArr("history", _history.value.map { it.toJson() })
+        setHistory((listOf(w) + _history.value.filterNot { it.video.id == v.id }).take(400))
+        saveHistoryLater()
     }
 
     fun removeHistory(id: String) {
-        _history.value = _history.value.filterNot { it.video.id == id }
-        writeArr("history", _history.value.map { it.toJson() })
+        setHistory(_history.value.filterNot { it.video.id == id })
+        saveHistoryLater()
     }
 
     fun clearHistory() {
-        _history.value = emptyList()
-        writeArr("history", emptyList())
+        setHistory(emptyList())
+        saveHistoryLater()
     }
 
     /** Videos empezados y no terminados. */
@@ -267,7 +308,7 @@ object Store {
             val inc = List(a.length()) { Watched.fromJson(a.getJSONObject(it)) }
             histN = inc.size
             val merged = (_history.value + inc).groupBy { it.video.id }.values.map { g -> g.maxBy { it.at } }.sortedByDescending { it.at }.take(400)
-            _history.value = merged; writeArr("history", merged.map { it.toJson() })
+            setHistory(merged); saveHistoryLater()
         }
         val t = strs("topics")
         if (t.isNotEmpty()) topics = (topics + t).distinct()

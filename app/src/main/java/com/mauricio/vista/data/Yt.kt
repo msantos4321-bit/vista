@@ -66,6 +66,7 @@ object Yt {
     fun toVideo(i: StreamInfoItem): Video {
         val live = i.streamType == StreamType.LIVE_STREAM || i.streamType == StreamType.AUDIO_LIVE_STREAM
         val date = runCatching { i.uploadDate?.offsetDateTime()?.toInstant()?.toEpochMilli() }.getOrNull() ?: 0L
+        Durations.learn(videoId(i.url), if (live) -1 else i.duration)
         return Video(
             url = i.url, title = i.name.orEmpty(), channel = i.uploaderName.orEmpty(), channelUrl = i.uploaderUrl.orEmpty(),
             thumb = bestImage(i.thumbnails, 480), duration = if (live) -1 else i.duration, views = i.viewCount,

@@ -178,9 +178,17 @@ fun SubsScreen() {
     // Dos formas de ver lo de tus canales: lo más reciente o recomendado para ti
     var mode by remember { mutableStateOf(subsMode) }
     val history by Store.history.collectAsState()
-    val recent = if (Store.hideShorts) feed.filterNot { it.short } else feed
-    val recommended = remember(feed, history.size) { com.mauricio.vista.data.Recs.fromSubs(feed) }
+    val tick by Store.settingsTick.collectAsState()
+    // Lo más nuevo primero (ya viene ordenado por fecha), sin repetidos ni lo que marcaste «No me interesa»
+    val recent = remember(feed, tick) {
+        val hidden = Store.hiddenVideos
+        feed.filter { it.id !in hidden && !(Store.hideShorts && it.short) }
+    }
+    val lastWatched = history.firstOrNull()?.video?.id
+    val recommended = remember(feed, lastWatched, tick) { com.mauricio.vista.data.Recs.fromSubs(feed) }
     val list = if (mode == "rec") recommended else recent
+    // En «Más recientes»: separadores Hoy / Ayer / Esta semana…
+    val headers = remember(list, mode) { if (mode == "rec") emptyMap() else dayHeaders(list) }
     val tv = DeviceUi.isTv
 
     if (subs.isEmpty()) {
@@ -233,13 +241,49 @@ fun SubsScreen() {
                 Spacer(Modifier.height(if (tv) 4.dp else 12.dp))
             }
         }
-        itemsIndexed(list, key = { _, v -> "v:" + v.id }) { i, v ->
-            val queue = list.drop(i + 1).take(20)
-            if (tv) VideoCard(v, onClick = { nav.play(v, queue) }, width = 190.dp, modifier = Modifier.rememberFocus(mem, "v:" + v.id), onLongClick = { videoMenu.value = v })
-            else PhoneVideoCard(v, onClick = { nav.play(v, queue) }, onLongClick = { videoMenu.value = v })
+        if (list.isEmpty() && st !is Feed.State.Loading) item(span = { GridItemSpan(cols) }) {
+            EmptyHint(if (mode == "rec") "Nada nuevo por recomendar" else "Sin videos nuevos", "Cuando tus canales suban algo aparecerá aquí.")
+        }
+        list.forEachIndexed { i, v ->
+            headers[i]?.let { h ->
+                item(key = "h:" + h + i, span = { GridItemSpan(cols) }) {
+                    Text(h, color = C.Hi, fontSize = if (tv) 18.sp else 16.sp, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(start = if (tv) 0.dp else 16.dp, top = if (i == 0) 0.dp else 10.dp, bottom = if (tv) 0.dp else 8.dp))
+                }
+            }
+            item(key = "v:" + v.id) { VideoGridItem(v, list, i, tv, mem) }
         }
     }
     RestoreFocus(mem, first)
+}
+
+/** Fecha de cada grupo: el índice donde empieza → «Hoy», «Ayer», «Esta semana», «Este mes», «Antes». */
+private fun dayHeaders(list: List<Video>): Map<Int, String> {
+    val cal = java.util.Calendar.getInstance()
+    cal.set(java.util.Calendar.HOUR_OF_DAY, 0); cal.set(java.util.Calendar.MINUTE, 0); cal.set(java.util.Calendar.SECOND, 0); cal.set(java.util.Calendar.MILLISECOND, 0)
+    val today = cal.timeInMillis
+    val day = 86_400_000L
+    fun label(ms: Long) = when {
+        ms <= 0 -> "Antes"
+        ms >= today -> "Hoy"
+        ms >= today - day -> "Ayer"
+        ms >= today - 6 * day -> "Esta semana"
+        ms >= today - 30 * day -> "Este mes"
+        else -> "Antes"
+    }
+    val out = LinkedHashMap<Int, String>()
+    var prev = ""
+    list.forEachIndexed { i, v -> val l = label(v.publishedMs); if (l != prev) { out[i] = l; prev = l } }
+    return out
+}
+
+@Composable
+private fun VideoGridItem(v: Video, list: List<Video>, i: Int, tv: Boolean, mem: FocusMemory) {
+    val nav = LocalNav.current
+    // La fila de donde vino se calcula hasta que se abre el video (antes se calculaba por cada tarjeta)
+    val play = { nav.play(v, list.drop(i + 1).take(20)) }
+    if (tv) VideoCard(v, onClick = play, width = 190.dp, modifier = Modifier.rememberFocus(mem, "v:" + v.id), onLongClick = { videoMenu.value = v })
+    else PhoneVideoCard(v, onClick = play, onLongClick = { videoMenu.value = v })
 }
 
 // ======================================================================

@@ -38,8 +38,35 @@ object Remote {
     /** Lo pone la actividad al arrancar. */
     var isTv = false
 
-    /** Lo conecta el reproductor de este aparato: estado actual (para el control desde el celular). Corre en el hilo principal. */
-    @Volatile var nowPlaying: (() -> JSONObject)? = null
+    /**
+     * Lo conecta el reproductor de este aparato: estado actual (para el control desde el celular). Corre en el hilo principal.
+     * Con `true` incluye los videos recomendados (pesado); sin él, solo lo indispensable (se pide cada segundo).
+     */
+    @Volatile var nowPlaying: ((Boolean) -> JSONObject)? = null
+
+    /** La pantalla de Vista está a la vista (la pone la actividad). */
+    @Volatile var foreground = false
+
+    /** Lo pone la actividad: para poder traer Vista al frente cuando el celular manda un video. */
+    @Volatile var app: android.content.Context? = null
+
+    /** Orden que llegó cuando la pantalla estaba cerrada: se ejecuta al abrir. */
+    @Volatile private var pending: Cmd? = null
+    fun takePending(): Cmd? = pending.also { pending = null }
+
+    /** Manda la orden a la pantalla; si Vista no está al frente, la trae (para que el video no suene sin verse). */
+    private fun deliver(c: Cmd) {
+        if (_cmds.subscriptionCount.value == 0) pending = c else _cmds.tryEmit(c)
+        if (!foreground) app?.let { ctx ->
+            runCatching {
+                ctx.startActivity(
+                    android.content.Intent(ctx, com.mauricio.vista.MainActivity::class.java).addFlags(
+                        android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP,
+                    ),
+                )
+            }
+        }
+    }
     /** Lo conecta el reproductor: ejecuta una orden («toggle», «seek», «seekto», «next», «live», «stop»…). Corre en el hilo principal. */
     @Volatile var onControl: ((JSONObject) -> Boolean)? = null
 
@@ -100,6 +127,7 @@ object Remote {
         if (parts.size < 2) return
         val method = parts[0]
         val path = parts[1].substringBefore('?')
+        val query = parts[1].substringAfter('?', "")
         var length = 0
         while (true) {
             val h = readLine(input) ?: break
@@ -126,12 +154,12 @@ object Remote {
                 val js = if (raw.startsWith("{")) runCatching { JSONObject(raw) }.getOrNull() else null
                 val txt = js?.optString("url") ?: raw
                 val url = Yt.findLink(txt) ?: Yt.videoId(txt)?.let { Yt.watchUrl(it) }
-                if (url != null) { _cmds.tryEmit(Cmd.Play(url, js?.optLong("t", -1) ?: -1)); Triple(200, "application/json", """{"ok":true}""".toByteArray()) }
+                if (url != null) { deliver(Cmd.Play(url, js?.optLong("t", -1) ?: -1)); Triple(200, "application/json", """{"ok":true}""".toByteArray()) }
                 else Triple(400, "application/json", """{"ok":false,"error":"No encontré una liga de YouTube"}""".toByteArray())
             }
             method == "POST" && path == "/buscar" -> {
                 val q = String(body).trim()
-                if (q.isNotBlank()) _cmds.tryEmit(Cmd.Search(q))
+                if (q.isNotBlank()) deliver(Cmd.Search(q))
                 Triple(200, "application/json", """{"ok":true}""".toByteArray())
             }
             method == "POST" && path == "/importar" -> {
@@ -141,7 +169,8 @@ object Remote {
             }
             // ---- Control remoto: lo que se está viendo, órdenes y la cola ----
             method == "GET" && path == "/ahora" -> {
-                val o = onMain { nowPlaying?.invoke() } ?: JSONObject()
+                val full = query.contains("todo=1")
+                val o = onMain { nowPlaying?.invoke(full) } ?: JSONObject()
                 val q = JSONArray(); Queue.items.value.take(60).forEach { q.put(it.toJson()) }
                 o.put("ok", true).put("nombre", deviceName()).put("cola", q).put("repetir", Queue.repeat.value)
                 Triple(200, "application/json", o.toString().toByteArray())
@@ -350,7 +379,7 @@ object Remote {
 
     // ---- Control remoto de la tele ----
     /** Lo que está viendo la tele (o null si no contesta). */
-    suspend fun now(): JSONObject? = getText("/ahora")?.let { runCatching { JSONObject(it) }.getOrNull() }
+    suspend fun now(full: Boolean = false): JSONObject? = getText(if (full) "/ahora?todo=1" else "/ahora")?.let { runCatching { JSONObject(it) }.getOrNull() }
 
     suspend fun control(a: String, v: Long = 0): Boolean =
         postText("/control", JSONObject().put("a", a).put("v", v).toString().toByteArray(), "application/json", fast = true)

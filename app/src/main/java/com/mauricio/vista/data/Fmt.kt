@@ -45,7 +45,8 @@ object Fmt {
 
     /** «hace 2 días · 12 mil vistas» (lo reciente primero, que es lo que más importa). */
     fun whenViews(v: Video): String = listOfNotNull(
-        if (v.live) "EN VIVO" else (v.uploaded.ifBlank { ago(v.publishedMs) }).takeIf { it.isNotBlank() }?.let { shortAgo(it) },
+        // Con la fecha exacta se calcula al momento (el texto guardado se queda viejo: «hace 2 horas» para siempre)
+        if (v.live) "EN VIVO" else (if (v.publishedMs > 0) ago(v.publishedMs) else v.uploaded).takeIf { it.isNotBlank() }?.let { shortAgo(it) },
         if (v.live) null else views(v.views).takeIf { it.isNotBlank() },
     ).joinToString(" · ")
 

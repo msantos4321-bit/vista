@@ -80,6 +80,15 @@ import kotlinx.coroutines.delay
 
 val uiScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
+/** Cuánto llevas visto de cada video (id → 0..1). Lo pone App una sola vez para todas las tarjetas. */
+val LocalProgress = androidx.compose.runtime.compositionLocalOf<Map<String, Float>> { emptyMap() }
+/** Duraciones que se completaron aparte (las novedades no la traen). */
+val LocalDurations = androidx.compose.runtime.compositionLocalOf<Map<String, Long>> { emptyMap() }
+
+/** Duración del video en segundos (0 = no se sabe, −1 = en vivo). */
+@Composable
+fun durationOf(v: Video): Long = if (v.duration != 0L) v.duration else LocalDurations.current[v.id] ?: 0L
+
 /** Recuerda qué tenía el foco en cada pantalla para regresar ahí al volver (tele). */
 class FocusMemory {
     var key: String? = null
@@ -119,23 +128,26 @@ fun Img(url: String?, modifier: Modifier = Modifier, contentScale: ContentScale 
 
 private val cardShape = RoundedCornerShape(12.dp)
 
-/** Miniatura con duración, «EN VIVO» y barra de avance. */
+/** Miniatura con duración, «EN VIVO» y barra de lo que ya viste. */
 @Composable
 fun Thumb(v: Video, progress: Float, modifier: Modifier = Modifier) {
+    val dur = durationOf(v)
+    // Si no se pasó el avance, se toma del historial: así todas las tarjetas enseñan lo que ya viste
+    val seen = if (progress > 0.01f) progress else LocalProgress.current[v.id] ?: 0f
     Box(modifier.background(C.Panel2)) {
         Img(v.thumbHq, Modifier.fillMaxSize())
-        if (v.live) {
+        if (v.live || dur < 0) {
             Text(
                 "EN VIVO", Modifier.align(Alignment.BottomEnd).padding(6.dp).background(C.Live, RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 1.dp),
                 color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold,
             )
-        } else if (v.duration > 0) {
+        } else if (dur > 0) {
             Text(
-                Fmt.duration(v.duration), Modifier.align(Alignment.BottomEnd).padding(6.dp).background(Color(0xD9000000), RoundedCornerShape(4.dp)).padding(horizontal = 5.dp, vertical = 1.dp),
+                Fmt.duration(dur), Modifier.align(Alignment.BottomEnd).padding(6.dp).background(Color(0xD9000000), RoundedCornerShape(4.dp)).padding(horizontal = 5.dp, vertical = 1.dp),
                 color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
             )
         }
-        if (progress > 0.01f) ProgressBar(progress, Modifier.align(Alignment.BottomCenter).fillMaxWidth())
+        if (seen > 0.01f) ProgressBar(seen, Modifier.align(Alignment.BottomCenter).fillMaxWidth())
     }
 }
 

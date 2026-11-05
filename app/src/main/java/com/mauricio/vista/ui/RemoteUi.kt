@@ -114,30 +114,44 @@ fun RemoteTvScreen() {
     var searching by remember { mutableStateOf(false) }
     val tvName = Store.devices.let { l -> (l.firstOrNull { it.tv } ?: l.firstOrNull())?.name }.orEmpty().ifBlank { "la tele" }
 
+    // Los recomendados del video de la tele (se piden solo al cambiar de video o cada ~10 s: pesan)
+    var related by remember { mutableStateOf<List<Video>>(emptyList()) }
+    var relFor by remember { mutableStateOf("") }
+    // Cuándo llegó el último estado: entre preguntas la barra avanza sola (se ve fluida)
+    var gotAt by remember { mutableStateOf(0L) }
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    fun take(js: JSONObject) {
+        state = js; gotAt = System.currentTimeMillis(); reachable = true
+        js.optJSONArray("related")?.let { related = it.videos(); relFor = js.optJSONObject("video")?.optString("id").orEmpty() }
+    }
+
     // Se pregunta a la tele cada segundo (sin estorbar mientras arrastras la barra)
     LaunchedEffect(tick) {
+        var n = 0
         while (true) {
             if (!dragging) {
-                val s = Remote.now()
-                if (s != null) { state = s; reachable = true } else if (state == null || reachable) reachable = false
+                val curId = state?.optJSONObject("video")?.optString("id").orEmpty()
+                val s = Remote.now(full = curId.isBlank() || curId != relFor || n % 10 == 0)
+                if (s != null) take(s) else if (state == null || reachable) reachable = false
+                n++
             }
             delay(1000)
         }
     }
+    LaunchedEffect(Unit) { while (true) { delay(250); now = System.currentTimeMillis() } }
     fun act(a: String, v: Long = 0) {
         uiScope.launch {
-            if (!Remote.control(a, v)) Toast.show("La tele no respondió")
-            Remote.now()?.let { state = it }
+            if (!Remote.control(a, v)) Toast.show(if (a == "next") "No hay un siguiente video" else "La tele no respondió")
+            Remote.now()?.let { take(it) }
         }
     }
     fun queueAct(a: String, id: String = "") {
-        uiScope.launch { Remote.queue(a, id = id); Remote.now()?.let { state = it } }
+        uiScope.launch { Remote.queue(a, id = id); Remote.now()?.let { take(it) } }
     }
 
     val s = state
     val video = s?.optJSONObject("video")?.let { Video.fromJson(it) }
     val queue = s?.optJSONArray("cola").videos()
-    val related = s?.optJSONArray("related").videos()
     val next = s?.optJSONObject("next")?.let { Video.fromJson(it) }
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 30.dp)) {
@@ -176,10 +190,13 @@ fun RemoteTvScreen() {
                     Text(video.channel, color = C.Low, fontSize = 13.sp, maxLines = 1)
                     s.optString("error").takeIf { it.isNotBlank() }?.let { Text(it, color = C.Live, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp)) }
                     Spacer(Modifier.height(8.dp))
+                    // Mientras se reproduce, la posición avanza sola entre una pregunta y otra
+                    val moving = s.optBoolean("playing") && !s.optBoolean("buffering")
+                    val shownPos = s.optLong("pos") + if (moving && gotAt > 0) (now - gotAt).coerceIn(0, 3000) else 0
                     RemoteSeek(
-                        pos = s.optLong("pos"), dur = s.optLong("dur"), live = s.optBoolean("live"),
+                        pos = shownPos, dur = s.optLong("dur"), live = s.optBoolean("live"),
                         onDrag = { dragging = it },
-                        onSeek = { ms -> state = JSONObject(s.toString()).put("pos", ms); act("seekto", ms) },
+                        onSeek = { ms -> state?.let { cur -> state = JSONObject(cur.toString()).put("pos", ms); gotAt = System.currentTimeMillis() }; act("seekto", ms) },
                         onLive = { act("live") },
                     )
                     // Botones grandes
@@ -282,14 +299,18 @@ private fun RemoteSeek(pos: Long, dur: Long, live: Boolean, onDrag: (Boolean) ->
     var dragFrac by remember { mutableFloatStateOf(-1f) }
     val d = dur.coerceAtLeast(1)
     val frac = if (dragFrac >= 0) dragFrac else (pos.toFloat() / d).coerceIn(0f, 1f)
+    // En vivo la duración cambia cada segundo: los gestos leen siempre el valor actual (si no, se soltaba la barra)
+    val curD by androidx.compose.runtime.rememberUpdatedState(d)
+    val seek by androidx.compose.runtime.rememberUpdatedState(onSeek)
+    val drag by androidx.compose.runtime.rememberUpdatedState(onDrag)
     if (dur > 0) Box(
         Modifier.fillMaxWidth().height(34.dp)
-            .pointerInput(dur) { detectTapGestures { o -> onSeek((o.x / size.width * d).toLong()) } }
-            .pointerInput(dur) {
+            .pointerInput(Unit) { detectTapGestures { o -> seek((o.x / size.width * curD).toLong()) } }
+            .pointerInput(Unit) {
                 detectHorizontalDragGestures(
-                    onDragStart = { o -> dragFrac = (o.x / size.width).coerceIn(0f, 1f); onDrag(true) },
-                    onDragEnd = { if (dragFrac >= 0) onSeek((dragFrac * d).toLong()); dragFrac = -1f; onDrag(false) },
-                    onDragCancel = { dragFrac = -1f; onDrag(false) },
+                    onDragStart = { o -> dragFrac = (o.x / size.width).coerceIn(0f, 1f); drag(true) },
+                    onDragEnd = { if (dragFrac >= 0) seek((dragFrac * curD).toLong()); dragFrac = -1f; drag(false) },
+                    onDragCancel = { dragFrac = -1f; drag(false) },
                     onHorizontalDrag = { ch, _ -> dragFrac = (ch.position.x / size.width).coerceIn(0f, 1f) },
                 )
             },

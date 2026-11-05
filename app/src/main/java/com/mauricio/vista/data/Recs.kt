@@ -211,33 +211,71 @@ object Recs {
     }
 
     /**
-     * «Recomendados de tus suscripciones»: lo nuevo de tus canales ordenado por lo que más ves de cada uno
-     * y qué tan reciente es; sin lo que ya viste ni lo que dijiste que no te interesa.
+     * «Recomendados de tus suscripciones»: lo de tus canales que más te puede gustar.
+     * Pesa: qué tanto ves ese canal (lo reciente cuenta más), qué tan nuevo es el video y si le está yendo
+     * mejor que a lo normal de ese canal (vistas por hora). Sin lo que ya viste ni lo que dijiste que no te interesa,
+     * sin estrenos que aún no empiezan y con pocos videos por canal para que haya variedad.
      */
-    fun fromSubs(feed: List<Video>): List<Video> {
+    fun fromSubs(feed: List<Video>, limit: Int = 80): List<Video> {
         val hist = Store.history.value
-        val seen = hist.filter { it.finished || it.progress > 0.5f }.map { it.video.id }.toHashSet()
-        val chanWeight = HashMap<String, Double>()
-        hist.take(200).forEach { w -> if (w.video.channelUrl.isNotBlank()) chanWeight.add(Store.channelKey(w.video.channelUrl), w.progress.toDouble() + 0.2) }
-        val maxChan = chanWeight.values.maxOrNull() ?: 1.0
+        val seen = hist.filter { it.finished || it.progress > 0.5f }.mapTo(HashSet()) { it.video.id }
+        val hidden = Store.hiddenVideos
         val now = System.currentTimeMillis()
-        val ranked = feed.asSequence()
-            .filter { it.id !in seen && it.id !in Store.hiddenVideos && !Store.isBlocked(it.channelUrl) && !(Store.hideShorts && it.short) }
-            .map { v ->
-                val aff = (chanWeight[Store.channelKey(v.channelUrl)] ?: 0.0) / maxChan
-                val ageDays = if (v.publishedMs > 0) ((now - v.publishedMs) / 86_400_000.0).coerceAtLeast(0.0) else 7.0
-                v to (0.15 + aff) * Math.exp(-ageDays / 10.0)
-            }
-            .sortedByDescending { it.second }
+        val aff = Feed.affinity()
+        val maxAff = aff.values.maxOrNull()?.takeIf { it > 0 } ?: 1.0
+        val pool = feed.filter { v ->
+            val age = if (v.publishedMs > 0) now - v.publishedMs else 0L
+            v.id !in seen && v.id !in hidden && !Store.isBlocked(v.channelUrl) && !(Store.hideShorts && v.short) &&
+                age < 21L * 86_400_000L &&
+                // 0 vistas después de 2 horas = estreno o transmisión programada que todavía no empieza
+                !(v.views == 0L && age > 2 * 3_600_000L)
+        }
+        fun velocity(v: Video): Double {
+            val hours = if (v.publishedMs > 0) ((now - v.publishedMs) / 3_600_000.0).coerceAtLeast(2.0) else 48.0
+            return if (v.views > 0) v.views / hours else 0.0
+        }
+        // Lo normal de cada canal (mediana de vistas por hora)
+        val median = pool.groupBy { Store.channelKey(it.channelUrl) }.mapValues { (_, l) ->
+            l.map { velocity(it) }.sorted().let { it[it.size / 2] }
+        }
+        val ranked = pool.map { v ->
+            val k = Store.channelKey(v.channelUrl)
+            val a = Math.sqrt((aff[k] ?: 0.0) / maxAff)
+            val ageDays = if (v.publishedMs > 0) ((now - v.publishedMs) / 86_400_000.0).coerceAtLeast(0.0) else 7.0
+            val fresh = Math.exp(-ageDays / 5.0)
+            val pop = if (v.views > 0) ((Math.log(velocity(v) + 1) - Math.log((median[k] ?: 0.0) + 1)) / 1.5).coerceIn(-1.0, 1.0) else 0.0
+            v to (0.2 + a) * (0.35 + fresh) * (1 + 0.35 * pop)
+        }.sortedByDescending { it.second }
+        // Variedad: máximo 2 por canal en los primeros 24 y 3 en total
         val perChannel = HashMap<String, Int>()
         val out = ArrayList<Video>()
         for ((v, _) in ranked) {
             val k = Store.channelKey(v.channelUrl)
             val n = perChannel[k] ?: 0
-            if (n >= 3) continue
+            if (n >= 3 || (n >= 2 && out.size < 24)) continue
             perChannel[k] = n + 1
             out += v
-            if (out.size >= 80) break
+            if (out.size >= limit) break
+        }
+        return out
+    }
+
+    /**
+     * «Para ti» de Inicio, como YouTube: mezcla lo que se parece a lo que ves, lo mejor de tus canales y
+     * lo popular de tus temas. Sin repetidos ni lo que ya viste.
+     */
+    fun homeMix(forYou: List<Video>, subsRec: List<Video>, general: List<Video>, limit: Int = 90): List<Video> {
+        val seen = Store.history.value.filter { it.finished || it.progress > 0.5f }.mapTo(HashSet()) { it.video.id }
+        val hidden = Store.hiddenVideos
+        fun ok(v: Video) = v.id !in seen && v.id !in hidden && !Store.isBlocked(v.channelUrl) && !(Store.hideShorts && v.short)
+        val a = forYou.filter(::ok); val b = subsRec.filter(::ok); val c = general.filter(::ok)
+        val out = ArrayList<Video>(); val ids = HashSet<String>()
+        var i = 0; var j = 0; var k = 0
+        // Patrón: 2 parecidos a lo que ves, 1 de tus canales, 1 general
+        while ((i < a.size || j < b.size || k < c.size) && out.size < limit) {
+            repeat(2) { while (i < a.size) { val v = a[i++]; if (ids.add(v.id)) { out += v; break } } }
+            while (j < b.size) { val v = b[j++]; if (ids.add(v.id)) { out += v; break } }
+            while (k < c.size) { val v = c[k++]; if (ids.add(v.id)) { out += v; break } }
         }
         return out
     }

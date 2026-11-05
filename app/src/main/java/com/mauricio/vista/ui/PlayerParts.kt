@@ -336,6 +336,8 @@ private fun SeekBar(ui: PlayerUi, tv: Boolean) {
     val segs = ui.segments
     val chapters = ui.info?.streamSegments.orEmpty()
     val fr = remember { FocusRequester() }
+    // Los gestos viven más que la pantalla: leen siempre la duración actual (antes se quedaban con 0 y mandaban al inicio)
+    val curDur by androidx.compose.runtime.rememberUpdatedState(dur)
     Box(
         Modifier
             .fillMaxWidth()
@@ -354,12 +356,12 @@ private fun SeekBar(ui: PlayerUi, tv: Boolean) {
                     .focusable(interactionSource = src)
                 else Modifier
                     .pointerInput(Unit) {
-                        detectTapGestures { o -> ui.player.seekTo((o.x / size.width * dur).toLong()); ui.showControls() }
+                        detectTapGestures { o -> if (curDur > 1) ui.player.seekTo((o.x / size.width * curDur).toLong()); ui.showControls() }
                     }
                     .pointerInput(Unit) {
                         detectHorizontalDragGestures(
                             onDragStart = { o -> dragFrac = (o.x / size.width).coerceIn(0f, 1f); ui.controlsTick++ },
-                            onDragEnd = { if (dragFrac >= 0) ui.player.seekTo((dragFrac * dur).toLong()); dragFrac = -1f },
+                            onDragEnd = { if (dragFrac >= 0 && curDur > 1) ui.player.seekTo((dragFrac * curDur).toLong()); dragFrac = -1f },
                             onDragCancel = { dragFrac = -1f },
                             onHorizontalDrag = { ch, _ -> dragFrac = (ch.position.x / size.width).coerceIn(0f, 1f); ui.controlsTick++ },
                         )
