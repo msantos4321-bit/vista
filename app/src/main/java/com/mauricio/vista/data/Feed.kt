@@ -143,7 +143,7 @@ object Feed {
      * Revisa los canales que ya toca revisar (o todos con [force]).
      * Lo nuevo aparece en pantalla mientras se sigue revisando.
      */
-    suspend fun refresh(force: Boolean = false) { lock.withLock {
+    suspend fun refresh(force: Boolean = false): Unit = withContext(Dispatchers.Default) { lock.withLock {
         if (Store.subs.value.isEmpty()) { _videos.value = emptyList(); _state.value = State.Empty; return@withLock }
         resolveHandles()
         val subs = Store.subs.value
